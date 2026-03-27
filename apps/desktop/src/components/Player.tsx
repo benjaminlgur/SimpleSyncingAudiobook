@@ -99,15 +99,17 @@ export function Player({
     }
   }, [remotePosition, convexId, initialLoaded, book]);
 
-  // Initialize sync engine
+  // Initialize sync engine — works with or without a Convex ID.
+  // Without an ID, the engine persists locally but skips remote pushes.
   useEffect(() => {
-    if (!convexId) return;
+    const storageKey = convexId || `local_${book.name}_${book.checksum}`;
 
     const pushFn = async (position: {
       audiobookId: string;
       chapterIndex: number;
       positionMs: number;
     }) => {
+      if (!convexId) throw new Error("No Convex ID yet");
       await updatePosition({
         audiobookId: position.audiobookId as Id<"audiobooks">,
         chapterIndex: position.chapterIndex,
@@ -115,18 +117,26 @@ export function Player({
       });
     };
 
-    const engine = new SyncEngine(convexId, localStorageAdapter, pushFn);
+    const engine = new SyncEngine(storageKey, localStorageAdapter, pushFn);
     syncEngineRef.current = engine;
 
     const unsub = engine.subscribe(setSyncState);
-    engine.initialize();
+
+    (async () => {
+      const localPos = await engine.initialize();
+      if (localPos && !initialLoaded) {
+        setInitialChapter(localPos.chapterIndex);
+        setInitialPosition(localPos.positionMs);
+      }
+    })();
 
     return () => {
       unsub();
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition]);
+    // Re-create when convexId becomes available so pushFn can reach Convex
+  }, [convexId, updatePosition, book.name, book.checksum, initialLoaded]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
@@ -286,6 +296,11 @@ function PlayerInner({
         <p className="text-sm font-medium text-foreground truncate">
           {chapterLabel}
         </p>
+        {playerState.error && (
+          <p className="text-xs text-destructive mt-1 truncate">
+            {playerState.error}
+          </p>
+        )}
       </div>
 
       {/* Progress bar */}

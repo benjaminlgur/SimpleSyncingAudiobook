@@ -16,6 +16,9 @@
     "plugins": [
       "expo-router",
       "expo-document-picker"
-    ]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.audiobook.player"
+    }
   }
 }

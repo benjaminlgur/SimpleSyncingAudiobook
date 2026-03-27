@@ -96,7 +96,8 @@ export function LinkingDialog({
                   <button
                     onClick={async () => {
                       await unlinkMutation({
-                        linkedId: book._id,
+                        audiobookId: audiobookId as Id<"audiobooks">,
+                        peerId: book._id,
                       });
                     }}
                     className="text-xs text-destructive hover:underline"

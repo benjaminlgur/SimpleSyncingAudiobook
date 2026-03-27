@@ -117,15 +117,17 @@ export default function PlayerScreen() {
     }
   }, [remotePosition, convexId, initialLoaded, book]);
 
-  // Initialize sync engine
+  // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
-    if (!convexId) return;
+    if (!book) return;
+    const storageKey = convexId || `local_${book.name}_${book.checksum}`;
 
     const pushFn = async (position: {
       audiobookId: string;
       chapterIndex: number;
       positionMs: number;
     }) => {
+      if (!convexId) throw new Error("No Convex ID yet");
       await updatePosition({
         audiobookId: position.audiobookId as Id<"audiobooks">,
         chapterIndex: position.chapterIndex,
@@ -133,10 +135,17 @@ export default function PlayerScreen() {
       });
     };
 
-    const engine = new SyncEngine(convexId, asyncStorageAdapter, pushFn);
+    const engine = new SyncEngine(storageKey, asyncStorageAdapter, pushFn);
     syncEngineRef.current = engine;
     const unsub = engine.subscribe(setSyncState);
-    engine.initialize();
+
+    (async () => {
+      const localPos = await engine.initialize();
+      if (localPos && !initialLoaded) {
+        setInitialChapter(localPos.chapterIndex);
+        setInitialPosition(localPos.positionMs);
+      }
+    })();
 
     const unsubNet = NetInfo.addEventListener((state) => {
       if (state.isConnected && state.isInternetReachable) {
@@ -150,7 +159,7 @@ export default function PlayerScreen() {
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition]);
+  }, [convexId, updatePosition, book, initialLoaded]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "prebuild": "expo prebuild"
+    "prebuild": "expo prebuild",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@audiobook/shared": "workspace:*",

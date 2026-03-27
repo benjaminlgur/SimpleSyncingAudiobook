@@ -1,6 +1,5 @@
-import { readDir, stat } from "@tauri-apps/plugin-fs";
+import { readDir, readFile, stat } from "@tauri-apps/plugin-fs";
 import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { computeChecksum } from "@audiobook/shared";
 
@@ -8,9 +7,26 @@ const AUDIO_EXTENSIONS = new Set([
   ".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav", ".aac", ".wma",
 ]);
 
+const MIME_TYPES: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  m4b: "audio/mp4",
+  ogg: "audio/ogg",
+  opus: "audio/opus",
+  flac: "audio/flac",
+  wav: "audio/wav",
+  aac: "audio/aac",
+  wma: "audio/x-ms-wma",
+};
+
 function isAudioFile(name: string): boolean {
   const ext = name.substring(name.lastIndexOf(".")).toLowerCase();
   return AUDIO_EXTENSIONS.has(ext);
+}
+
+function joinPath(folder: string, file: string): string {
+  const sep = folder.includes("\\") ? "\\" : "/";
+  return `${folder}${sep}${file}`;
 }
 
 export async function pickAudiobookFolder(): Promise<string | null> {
@@ -28,7 +44,7 @@ export async function scanAudiobookFolder(
   for (const entry of entries) {
     if (entry.isFile && entry.name && isAudioFile(entry.name)) {
       try {
-        const fileStat = await stat(`${folderPath}\\${entry.name}`);
+        const fileStat = await stat(joinPath(folderPath, entry.name));
         audioFiles.push({ name: entry.name, size: fileStat.size });
       } catch {
         audioFiles.push({ name: entry.name, size: 0 });
@@ -62,7 +78,29 @@ export async function scanAudiobookFolder(
   };
 }
 
-export function getAudioFileUrl(folderPath: string, filename: string): string {
-  const fullPath = `${folderPath}\\${filename}`;
-  return convertFileSrc(fullPath);
+let currentBlobUrl: string | null = null;
+
+export async function loadAudioFileAsBlob(
+  folderPath: string,
+  filename: string
+): Promise<string> {
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
+
+  const fullPath = joinPath(folderPath, filename);
+  const contents = await readFile(fullPath);
+  const ext = filename.split(".").pop()?.toLowerCase() || "mp3";
+  const mime = MIME_TYPES[ext] || "audio/mpeg";
+  const blob = new Blob([contents], { type: mime });
+  currentBlobUrl = URL.createObjectURL(blob);
+  return currentBlobUrl;
+}
+
+export function revokeCurrentAudioBlob() {
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
 }

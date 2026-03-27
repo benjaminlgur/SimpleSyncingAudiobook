@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "title": "Audiobook Player",
     "windows": [
       {
         "title": "Audiobook Player",
@@ -36,12 +35,5 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {
-    "fs": {
-      "scope": {
-        "allow": ["**"],
-        "requireLiteralLeadingDot": false
-      }
-    }
-  }
+  "plugins": {}
 }

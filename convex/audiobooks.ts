@@ -102,17 +102,36 @@ export const link = mutation({
 });
 
 export const unlink = mutation({
-  args: { linkedId: v.id("audiobooks") },
+  args: {
+    audiobookId: v.id("audiobooks"),
+    peerId: v.id("audiobooks"),
+  },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const link = await ctx.db
+    // The link row could have either ordering, so check both directions
+    const asLinked = await ctx.db
       .query("audiobookLinks")
-      .withIndex("by_linked", (q) => q.eq("linkedId", args.linkedId))
-      .unique();
+      .withIndex("by_linked", (q) => q.eq("linkedId", args.peerId))
+      .collect();
+    for (const row of asLinked) {
+      if (row.canonicalId === args.audiobookId) {
+        await ctx.db.delete(row._id);
+        return true;
+      }
+    }
 
-    if (!link) return false;
-    await ctx.db.delete(link._id);
-    return true;
+    const asCanonical = await ctx.db
+      .query("audiobookLinks")
+      .withIndex("by_canonical", (q) => q.eq("canonicalId", args.peerId))
+      .collect();
+    for (const row of asCanonical) {
+      if (row.linkedId === args.audiobookId) {
+        await ctx.db.delete(row._id);
+        return true;
+      }
+    }
+
+    return false;
   },
 });
 

@@ -97,7 +97,10 @@ export function LinkingModal({
                       </Text>
                     </View>
                     <TouchableOpacity
-                      onPress={() => unlinkMutation({ linkedId: item._id })}
+                      onPress={() => unlinkMutation({
+                        audiobookId: audiobookId as Id<"audiobooks">,
+                        peerId: item._id,
+                      })}
                     >
                       <Text className="text-xs text-red-500">Unlink</Text>
                     </TouchableOpacity>

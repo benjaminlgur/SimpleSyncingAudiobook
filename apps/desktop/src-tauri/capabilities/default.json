@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/refs/heads/main/nicegui/node_modules/@anthropic-ai/claude-code/assets/capability.schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],

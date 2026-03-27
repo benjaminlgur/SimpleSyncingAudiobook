@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { ChapterInfo } from "@audiobook/shared";
-import { getAudioFileUrl } from "../lib/tauri-fs";
+import { loadAudioFileAsBlob, revokeCurrentAudioBlob } from "../lib/tauri-fs";
 
 export interface AudioPlayerState {
   isPlaying: boolean;
@@ -9,6 +9,7 @@ export interface AudioPlayerState {
   durationMs: number;
   playbackSpeed: number;
   isLoading: boolean;
+  error: string | null;
 }
 
 export interface AudioPlayerControls {
@@ -58,6 +59,7 @@ export function useAudioPlayer(
     durationMs: 0,
     playbackSpeed: 1.0,
     isLoading: true,
+    error: null,
   });
 
   const stateRef = useRef(state);
@@ -74,24 +76,52 @@ export function useAudioPlayer(
     async (index: number, seekMs = 0) => {
       if (index < 0 || index >= chapters.length) return;
 
-      setState((s) => ({ ...s, isLoading: true, currentChapterIndex: index }));
+      setState((s) => ({
+        ...s,
+        isLoading: true,
+        currentChapterIndex: index,
+        error: null,
+      }));
 
       const audio = getOrCreateAudio();
       const wasPlaying = !audio.paused;
       audio.pause();
 
-      const url = getAudioFileUrl(folderPath, chapters[index].filename);
-      audio.src = url;
-      audio.playbackRate = stateRef.current.playbackSpeed;
+      try {
+        const blobUrl = await loadAudioFileAsBlob(
+          folderPath,
+          chapters[index].filename
+        );
+        audio.src = blobUrl;
+        audio.playbackRate = stateRef.current.playbackSpeed;
 
-      await new Promise<void>((resolve) => {
-        const onLoaded = () => {
-          audio.removeEventListener("loadedmetadata", onLoaded);
-          resolve();
-        };
-        audio.addEventListener("loadedmetadata", onLoaded);
-        audio.load();
-      });
+        await new Promise<void>((resolve, reject) => {
+          const onLoaded = () => {
+            cleanup();
+            resolve();
+          };
+          const onError = () => {
+            cleanup();
+            reject(
+              new Error(
+                audio.error?.message || "Audio element failed to decode file"
+              )
+            );
+          };
+          const cleanup = () => {
+            audio.removeEventListener("loadedmetadata", onLoaded);
+            audio.removeEventListener("error", onError);
+          };
+          audio.addEventListener("loadedmetadata", onLoaded);
+          audio.addEventListener("error", onError);
+          audio.load();
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to load audio";
+        console.error("loadChapter failed:", msg);
+        setState((s) => ({ ...s, isLoading: false, error: msg }));
+        return;
+      }
 
       audio.currentTime = seekMs / 1000;
       setState((s) => ({
@@ -103,8 +133,12 @@ export function useAudioPlayer(
       }));
 
       if (wasPlaying) {
-        await audio.play();
-        setState((s) => ({ ...s, isPlaying: true }));
+        try {
+          await audio.play();
+          setState((s) => ({ ...s, isPlaying: true }));
+        } catch (err) {
+          console.error("Auto-resume play failed:", err);
+        }
       }
     },
     [chapters, folderPath, getOrCreateAudio]
@@ -153,6 +187,7 @@ export function useAudioPlayer(
     return () => {
       audioRef.current?.pause();
       audioRef.current = null;
+      revokeCurrentAudioBlob();
     };
   }, []);
 
