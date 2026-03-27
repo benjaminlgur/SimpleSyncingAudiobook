@@ -13,7 +13,7 @@ import { api } from "../../../convex/_generated/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import { SyncEngine } from "@audiobook/shared";
-import type { SyncState, AudiobookMeta, ChapterInfo } from "@audiobook/shared";
+import type { SyncState, SyncPushResult, AudiobookMeta, ChapterInfo } from "@audiobook/shared";
 import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
 import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -59,6 +59,7 @@ export default function PlayerScreen() {
   const [initialLoaded, setInitialLoaded] = useState(false);
 
   const syncEngineRef = useRef<SyncEngine | null>(null);
+  const controlsRef = useRef<{ skipToChapter: (index: number, seekMs?: number) => Promise<void> } | null>(null);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
 
@@ -126,16 +127,26 @@ export default function PlayerScreen() {
       audiobookId: string;
       chapterIndex: number;
       positionMs: number;
-    }) => {
+      updatedAt: number;
+    }): Promise<SyncPushResult> => {
       if (!convexId) throw new Error("No Convex ID yet");
-      await updatePosition({
+      const result = await updatePosition({
         audiobookId: position.audiobookId as Id<"audiobooks">,
         chapterIndex: position.chapterIndex,
         positionMs: position.positionMs,
+        clientUpdatedAt: position.updatedAt,
       });
+      return {
+        accepted: result.accepted,
+        serverPosition: result.serverPosition,
+      };
     };
 
-    const engine = new SyncEngine(storageKey, asyncStorageAdapter, pushFn);
+    const onRemoteNewer = (remote: { chapterIndex: number; positionMs: number }) => {
+      controlsRef.current?.skipToChapter(remote.chapterIndex, remote.positionMs);
+    };
+
+    const engine = new SyncEngine(storageKey, asyncStorageAdapter, pushFn, onRemoteNewer);
     syncEngineRef.current = engine;
     const unsub = engine.subscribe(setSyncState);
 
@@ -207,6 +218,7 @@ export default function PlayerScreen() {
       onPause={handlePause}
       onPlay={handlePlay}
       onManualSync={() => syncEngineRef.current?.manualSync()}
+      controlsRef={controlsRef}
     />
   );
 }
@@ -227,6 +239,7 @@ interface PlayerInnerProps {
   onPause: () => void;
   onPlay: () => void;
   onManualSync: () => void;
+  controlsRef: React.MutableRefObject<{ skipToChapter: (index: number, seekMs?: number) => Promise<void> } | null>;
 }
 
 function PlayerInner({
@@ -245,6 +258,7 @@ function PlayerInner({
   onPause,
   onPlay,
   onManualSync,
+  controlsRef,
 }: PlayerInnerProps) {
   const [playerState, controls] = useMobileAudioPlayer({
     fileUris,
@@ -256,6 +270,11 @@ function PlayerInner({
     onPause,
     onPlay,
   });
+
+  useEffect(() => {
+    controlsRef.current = controls;
+    return () => { controlsRef.current = null; };
+  }, [controls, controlsRef]);
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =

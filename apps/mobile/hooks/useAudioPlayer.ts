@@ -24,7 +24,7 @@ export interface MobilePlayerControls {
   togglePlayPause: () => Promise<void>;
   seekTo: (ms: number) => Promise<void>;
   seekBy: (deltaMs: number) => Promise<void>;
-  skipToChapter: (index: number) => Promise<void>;
+  skipToChapter: (index: number, seekMs?: number) => Promise<void>;
   nextChapter: () => Promise<void>;
   prevChapter: () => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
@@ -193,8 +193,11 @@ export function useMobileAudioPlayer(
     }, []),
 
     skipToChapter: useCallback(
-      async (index: number) => {
+      async (index: number, seekMs?: number) => {
         await TrackPlayer.skip(index);
+        if (seekMs && seekMs > 0) {
+          await TrackPlayer.seekTo(seekMs / 1000);
+        }
         onChapterChange?.(index);
       },
       [onChapterChange]

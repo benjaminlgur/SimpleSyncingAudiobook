@@ -4,6 +4,7 @@ import type {
   SyncStatus,
   StorageAdapter,
   SyncPushFn,
+  OnRemoteNewerFn,
 } from "./types";
 
 const STORAGE_KEY_PREFIX = "audiobook_sync_";
@@ -20,6 +21,7 @@ export class SyncEngine {
 
   private storage: StorageAdapter;
   private pushFn: SyncPushFn;
+  private onRemoteNewer: OnRemoteNewerFn | null = null;
   private audiobookId: string;
 
   private remoteSyncTimer: ReturnType<typeof setInterval> | null = null;
@@ -30,11 +32,13 @@ export class SyncEngine {
   constructor(
     audiobookId: string,
     storage: StorageAdapter,
-    pushFn: SyncPushFn
+    pushFn: SyncPushFn,
+    onRemoteNewer?: OnRemoteNewerFn
   ) {
     this.audiobookId = audiobookId;
     this.storage = storage;
     this.pushFn = pushFn;
+    this.onRemoteNewer = onRemoteNewer ?? null;
   }
 
   subscribe(listener: (state: SyncState) => void): () => void {
@@ -70,6 +74,7 @@ export class SyncEngine {
     if (stored) {
       try {
         const position = JSON.parse(stored) as PlaybackPosition;
+        if (!position.updatedAt) position.updatedAt = Date.now();
         this.state.pending = position;
         return position;
       } catch {
@@ -110,6 +115,7 @@ export class SyncEngine {
       audiobookId: this.audiobookId,
       chapterIndex,
       positionMs,
+      updatedAt: Date.now(),
     };
   }
 
@@ -165,9 +171,28 @@ export class SyncEngine {
     this.setStatus("syncing");
 
     try {
-      await this.pushFn(this.state.pending);
-      this.setStatus("synced");
-      await this.storage.removeItem(STORAGE_KEY_PREFIX + this.audiobookId);
+      const result = await this.pushFn(this.state.pending);
+
+      if (result.accepted) {
+        this.setStatus("synced");
+        await this.storage.removeItem(STORAGE_KEY_PREFIX + this.audiobookId);
+      } else if (result.serverPosition) {
+        this.setStatus("synced");
+        await this.storage.removeItem(STORAGE_KEY_PREFIX + this.audiobookId);
+
+        if (!this.isPlaying) {
+          this.state.pending = {
+            audiobookId: this.audiobookId,
+            chapterIndex: result.serverPosition.chapterIndex,
+            positionMs: result.serverPosition.positionMs,
+            updatedAt: result.serverPosition.updatedAt,
+          };
+          this.onRemoteNewer?.({
+            chapterIndex: result.serverPosition.chapterIndex,
+            positionMs: result.serverPosition.positionMs,
+          });
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Sync failed";
       this.setStatus("error", message);

@@ -4,10 +4,11 @@ export type {
   PlaybackPosition,
   SyncStatus,
   SyncState,
+  SyncPushResult,
   PlayerState,
   StorageAdapter,
   SyncPushFn,
-  SyncPullFn,
+  OnRemoteNewerFn,
   FileInfo,
 } from "./types";
 

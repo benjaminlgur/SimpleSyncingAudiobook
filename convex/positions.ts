@@ -40,8 +40,20 @@ export const update = mutation({
     audiobookId: v.id("audiobooks"),
     chapterIndex: v.number(),
     positionMs: v.number(),
+    clientUpdatedAt: v.number(),
   },
-  returns: v.id("positions"),
+  returns: v.object({
+    positionId: v.id("positions"),
+    accepted: v.boolean(),
+    serverPosition: v.union(
+      v.object({
+        chapterIndex: v.number(),
+        positionMs: v.number(),
+        updatedAt: v.number(),
+      }),
+      v.null()
+    ),
+  }),
   handler: async (ctx, args) => {
     const canonicalId = await resolveCanonicalId(ctx, args.audiobookId);
 
@@ -50,22 +62,33 @@ export const update = mutation({
       .withIndex("by_audiobook", (q) => q.eq("audiobookId", canonicalId))
       .unique();
 
-    const now = Date.now();
+    if (existing && existing.updatedAt > args.clientUpdatedAt) {
+      return {
+        positionId: existing._id,
+        accepted: false,
+        serverPosition: {
+          chapterIndex: existing.chapterIndex,
+          positionMs: existing.positionMs,
+          updatedAt: existing.updatedAt,
+        },
+      };
+    }
 
     if (existing) {
       await ctx.db.patch(existing._id, {
         chapterIndex: args.chapterIndex,
         positionMs: args.positionMs,
-        updatedAt: now,
+        updatedAt: args.clientUpdatedAt,
       });
-      return existing._id;
+      return { positionId: existing._id, accepted: true, serverPosition: null };
     }
 
-    return await ctx.db.insert("positions", {
+    const id = await ctx.db.insert("positions", {
       audiobookId: canonicalId,
       chapterIndex: args.chapterIndex,
       positionMs: args.positionMs,
-      updatedAt: now,
+      updatedAt: args.clientUpdatedAt,
     });
+    return { positionId: id, accepted: true, serverPosition: null };
   },
 });

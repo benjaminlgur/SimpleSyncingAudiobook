@@ -15,6 +15,7 @@ export interface PlaybackPosition {
   audiobookId: string;
   chapterIndex: number;
   positionMs: number;
+  updatedAt: number;
 }
 
 export type SyncStatus = "idle" | "synced" | "syncing" | "error";
@@ -40,10 +41,14 @@ export interface StorageAdapter {
   removeItem(key: string): Promise<void>;
 }
 
-export type SyncPushFn = (position: PlaybackPosition) => Promise<void>;
-export type SyncPullFn = (
-  audiobookId: string
-) => Promise<PlaybackPosition | null>;
+export interface SyncPushResult {
+  accepted: boolean;
+  serverPosition: { chapterIndex: number; positionMs: number; updatedAt: number } | null;
+}
+
+export type SyncPushFn = (position: PlaybackPosition) => Promise<SyncPushResult>;
+
+export type OnRemoteNewerFn = (remote: { chapterIndex: number; positionMs: number }) => void;
 
 export interface FileInfo {
   name: string;

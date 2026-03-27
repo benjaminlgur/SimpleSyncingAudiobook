@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useAudioPlayer } from "../hooks/useAudioPlayer";
 import { SyncEngine } from "@audiobook/shared";
-import type { SyncState, SyncStatus } from "@audiobook/shared";
+import type { SyncState, SyncPushResult } from "@audiobook/shared";
 import type { LocalAudiobook } from "./AppShell";
 import { formatTime, formatTimeRemaining } from "../lib/utils";
 import { extractCoverArt } from "../lib/tauri-fs";
@@ -100,8 +100,9 @@ export function Player({
     }
   }, [remotePosition, convexId, initialLoaded, book]);
 
+  const seekToRef = useRef<((chapter: number, ms: number) => void) | null>(null);
+
   // Initialize sync engine — works with or without a Convex ID.
-  // Without an ID, the engine persists locally but skips remote pushes.
   useEffect(() => {
     const storageKey = convexId || `local_${book.name}_${book.checksum}`;
 
@@ -109,16 +110,26 @@ export function Player({
       audiobookId: string;
       chapterIndex: number;
       positionMs: number;
-    }) => {
+      updatedAt: number;
+    }): Promise<SyncPushResult> => {
       if (!convexId) throw new Error("No Convex ID yet");
-      await updatePosition({
+      const result = await updatePosition({
         audiobookId: position.audiobookId as Id<"audiobooks">,
         chapterIndex: position.chapterIndex,
         positionMs: position.positionMs,
+        clientUpdatedAt: position.updatedAt,
       });
+      return {
+        accepted: result.accepted,
+        serverPosition: result.serverPosition,
+      };
     };
 
-    const engine = new SyncEngine(storageKey, localStorageAdapter, pushFn);
+    const onRemoteNewer = (remote: { chapterIndex: number; positionMs: number }) => {
+      seekToRef.current?.(remote.chapterIndex, remote.positionMs);
+    };
+
+    const engine = new SyncEngine(storageKey, localStorageAdapter, pushFn, onRemoteNewer);
     syncEngineRef.current = engine;
 
     const unsub = engine.subscribe(setSyncState);
@@ -136,7 +147,6 @@ export function Player({
       engine.destroy();
       syncEngineRef.current = null;
     };
-    // Re-create when convexId becomes available so pushFn can reach Convex
   }, [convexId, updatePosition, book.name, book.checksum, initialLoaded]);
 
   const handlePositionUpdate = useCallback(
@@ -184,6 +194,7 @@ export function Player({
       onPause={handlePause}
       onPlay={handlePlay}
       onManualSync={() => syncEngineRef.current?.manualSync()}
+      seekToRef={seekToRef}
     />
   );
 }
@@ -203,6 +214,83 @@ interface PlayerInnerProps {
   onPause: () => void;
   onPlay: () => void;
   onManualSync: () => void;
+  seekToRef: React.MutableRefObject<((chapter: number, ms: number) => void) | null>;
+}
+
+function SeekBar({
+  progressPercent,
+  durationMs,
+  onSeek,
+}: {
+  progressPercent: number;
+  durationMs: number;
+  onSeek: (ms: number) => void;
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  const [dragPercent, setDragPercent] = useState<number | null>(null);
+
+  const percentFromEvent = useCallback(
+    (e: MouseEvent | React.MouseEvent) => {
+      const rect = barRef.current?.getBoundingClientRect();
+      if (!rect) return 0;
+      return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    },
+    []
+  );
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      setDragPercent(percentFromEvent(e) * 100);
+    };
+    const onUp = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      const pct = percentFromEvent(e);
+      setDragPercent(null);
+      onSeek(pct * durationMs);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [durationMs, onSeek, percentFromEvent]);
+
+  const displayPercent = dragPercent ?? progressPercent;
+
+  return (
+    <div
+      ref={barRef}
+      className="relative h-4 flex items-center cursor-pointer group"
+      onMouseDown={(e) => {
+        draggingRef.current = true;
+        const pct = percentFromEvent(e);
+        setDragPercent(pct * 100);
+      }}
+      onClick={(e) => {
+        if (dragPercent !== null) return;
+        const pct = percentFromEvent(e);
+        onSeek(pct * durationMs);
+      }}
+    >
+      <div className="absolute inset-x-0 h-1.5 bg-secondary rounded-full">
+        <div
+          className="absolute inset-y-0 left-0 bg-primary rounded-full"
+          style={{ width: `${displayPercent}%` }}
+        />
+      </div>
+      <div
+        className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-primary rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+        style={{
+          left: `calc(${displayPercent}% - 7px)`,
+          opacity: draggingRef.current ? 1 : undefined,
+        }}
+      />
+    </div>
+  );
 }
 
 function PlayerInner({
@@ -220,6 +308,7 @@ function PlayerInner({
   onPause,
   onPlay,
   onManualSync,
+  seekToRef,
 }: PlayerInnerProps) {
   const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
 
@@ -241,6 +330,13 @@ function PlayerInner({
     onPause,
     onPlay,
   });
+
+  useEffect(() => {
+    seekToRef.current = (chapter: number, ms: number) => {
+      controls.skipToChapter(chapter, ms);
+    };
+    return () => { seekToRef.current = null; };
+  }, [controls, seekToRef]);
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =
@@ -324,23 +420,11 @@ function PlayerInner({
 
       {/* Progress bar */}
       <div className="px-6 pb-1">
-        <div
-          className="relative h-1.5 bg-secondary rounded-full cursor-pointer group"
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const percent = (e.clientX - rect.left) / rect.width;
-            controls.seekTo(percent * playerState.durationMs);
-          }}
-        >
-          <div
-            className="absolute inset-y-0 left-0 bg-primary rounded-full transition-[width] duration-200"
-            style={{ width: `${progressPercent}%` }}
-          />
-          <div
-            className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-primary rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ left: `calc(${progressPercent}% - 7px)` }}
-          />
-        </div>
+        <SeekBar
+          progressPercent={progressPercent}
+          durationMs={playerState.durationMs}
+          onSeek={controls.seekTo}
+        />
         <div className="flex justify-between mt-1.5">
           <span className="text-xs text-muted-foreground">
             {formatTime(playerState.positionMs)}
