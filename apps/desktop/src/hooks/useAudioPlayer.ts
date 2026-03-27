@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { ChapterInfo } from "@audiobook/shared";
-import { loadAudioFileAsBlob, revokeCurrentAudioBlob } from "../lib/tauri-fs";
+import { loadAudioFileAsBlob, revokeCurrentAudioBlob, FileNotFoundError } from "../lib/tauri-fs";
 
 export interface AudioPlayerState {
   isPlaying: boolean;
@@ -10,6 +10,7 @@ export interface AudioPlayerState {
   playbackSpeed: number;
   isLoading: boolean;
   error: string | null;
+  fileNotFound: boolean;
 }
 
 export interface AudioPlayerControls {
@@ -65,6 +66,7 @@ export function useAudioPlayer(
     playbackSpeed: 1.0,
     isLoading: true,
     error: null,
+    fileNotFound: false,
   });
 
   const stateRef = useRef(state);
@@ -125,13 +127,16 @@ export function useAudioPlayer(
             audio.addEventListener("error", onError);
             audio.load();
           });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "Failed to load audio";
-          console.error("loadChapter failed:", msg);
-          setState((s) => ({ ...s, isLoading: false, error: msg }));
-          loadedFileRef.current = null;
-          return;
-        }
+      } catch (err) {
+        const notFound = err instanceof FileNotFoundError;
+        const msg = notFound
+          ? "Audiobook files not found — folder may have been moved or deleted"
+          : err instanceof Error ? err.message : "Failed to load audio";
+        console.error("loadChapter failed:", msg);
+        setState((s) => ({ ...s, isLoading: false, error: msg, fileNotFound: notFound }));
+        loadedFileRef.current = null;
+        return;
+      }
       }
 
       if (virtual) {

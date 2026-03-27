@@ -350,6 +350,29 @@ function PlayerInner({
         </View>
       </View>
 
+      {/* Error banner */}
+      {playerState.error && (
+        <View
+          className="mx-6 mb-2 rounded-lg p-3 flex-row items-center"
+          style={{ backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#fca5a5" }}
+        >
+          <Ionicons name="warning" size={18} color="#ef4444" />
+          <View className="flex-1 ml-2">
+            <Text className="text-xs font-medium" style={{ color: "#ef4444" }}>
+              Playback Error
+            </Text>
+            <Text className="text-xs" style={{ color: "#6b7280" }} numberOfLines={2}>
+              {playerState.error}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={onBack}>
+            <Text className="text-xs font-medium" style={{ color: "#6366f1" }}>
+              Go Back
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Chapter label */}
       <Text
         className="text-sm font-medium text-gray-900 text-center px-6 mb-2"

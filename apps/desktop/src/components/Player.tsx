@@ -6,7 +6,7 @@ import { SyncEngine } from "@audiobook/shared";
 import type { SyncState, SyncPushResult } from "@audiobook/shared";
 import type { LocalAudiobook } from "./AppShell";
 import { formatTime, formatTimeRemaining } from "../lib/utils";
-import { extractCoverArt } from "../lib/tauri-fs";
+import { extractCoverArt, pickAudiobookFolder, pickAudiobookFile, checkPathExists } from "../lib/tauri-fs";
 import { SyncIndicator } from "./SyncIndicator";
 import { ChaptersDrawer } from "./ChaptersDrawer";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -16,6 +16,7 @@ interface PlayerProps {
   convexUrl: string;
   onBack: () => void;
   onConvexIdResolved: (id: string) => void;
+  onRelocate: (newFolderPath: string) => void;
 }
 
 const localStorageAdapter = {
@@ -32,6 +33,7 @@ export function Player({
   convexUrl,
   onBack,
   onConvexIdResolved,
+  onRelocate,
 }: PlayerProps) {
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
@@ -194,6 +196,7 @@ export function Player({
       onPause={handlePause}
       onPlay={handlePlay}
       onManualSync={() => syncEngineRef.current?.manualSync()}
+      onRelocate={onRelocate}
       seekToRef={seekToRef}
     />
   );
@@ -214,6 +217,7 @@ interface PlayerInnerProps {
   onPause: () => void;
   onPlay: () => void;
   onManualSync: () => void;
+  onRelocate: (newFolderPath: string) => void;
   seekToRef: React.MutableRefObject<((chapter: number, ms: number) => void) | null>;
 }
 
@@ -308,9 +312,41 @@ function PlayerInner({
   onPause,
   onPlay,
   onManualSync,
+  onRelocate,
   seekToRef,
 }: PlayerInnerProps) {
   const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
+
+  const handleRelocateFromPlayer = async () => {
+    const isM4b = book.chapters.length > 0 &&
+      book.chapters[0].filename === book.chapters[book.chapters.length - 1].filename;
+
+    let newPath: string | null;
+    if (isM4b) {
+      newPath = await pickAudiobookFile();
+      if (newPath) {
+        const sepIdx = Math.max(newPath.lastIndexOf("/"), newPath.lastIndexOf("\\"));
+        newPath = sepIdx > 0 ? newPath.substring(0, sepIdx) : newPath;
+      }
+    } else {
+      newPath = await pickAudiobookFolder();
+    }
+
+    if (!newPath) return;
+
+    const firstFile = book.chapters[0]?.filename;
+    if (firstFile) {
+      const sep = newPath.includes("\\") ? "\\" : "/";
+      const testPath = `${newPath}${sep}${firstFile}`;
+      const found = await checkPathExists(testPath);
+      if (!found) {
+        alert(`Could not find "${firstFile}" in the selected location. Please choose the correct folder.`);
+        return;
+      }
+    }
+
+    onRelocate(newPath);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -407,12 +443,31 @@ function PlayerInner({
         )}
       </div>
 
+      {/* File-not-found banner */}
+      {playerState.fileNotFound && (
+        <div className="mx-6 mb-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 flex items-center gap-3">
+          <svg className="h-5 w-5 flex-shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-destructive">Files not found</p>
+            <p className="text-xs text-muted-foreground">Folder may have been moved or deleted</p>
+          </div>
+          <button
+            onClick={handleRelocateFromPlayer}
+            className="flex-shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Relocate
+          </button>
+        </div>
+      )}
+
       {/* Chapter label */}
       <div className="text-center px-6 pb-2">
         <p className="text-sm font-medium text-foreground truncate">
           {chapterLabel}
         </p>
-        {playerState.error && (
+        {playerState.error && !playerState.fileNotFound && (
           <p className="text-xs text-destructive mt-1 truncate">
             {playerState.error}
           </p>

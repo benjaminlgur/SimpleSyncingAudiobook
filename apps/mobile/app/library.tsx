@@ -25,6 +25,7 @@ const AUDIO_EXTENSIONS = [
 
 interface LocalAudiobook extends AudiobookMeta {
   convexId?: string;
+  missing?: boolean;
 }
 
 function isAudioFile(name: string): boolean {
@@ -41,15 +42,27 @@ export default function LibraryScreen() {
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
 
   useEffect(() => {
-    AsyncStorage.getItem(LIBRARY_KEY).then((stored) => {
-      if (stored) {
-        try {
-          setLibrary(JSON.parse(stored));
-        } catch {
-          // ignore
-        }
+    (async () => {
+      const stored = await AsyncStorage.getItem(LIBRARY_KEY);
+      if (!stored) return;
+      try {
+        const books: LocalAudiobook[] = JSON.parse(stored);
+        const validated = await Promise.all(
+          books.map(async (book) => {
+            try {
+              const firstUri = book.folderPath.split("|")[0];
+              const info = await FileSystem.getInfoAsync(firstUri);
+              return { ...book, missing: !info.exists };
+            } catch {
+              return { ...book, missing: true };
+            }
+          })
+        );
+        setLibrary(validated);
+      } catch {
+        // ignore
       }
-    });
+    })();
   }, []);
 
   const saveLibrary = useCallback(async (books: LocalAudiobook[]) => {
@@ -247,14 +260,25 @@ export default function LibraryScreen() {
           library.map((book) => (
             <TouchableOpacity
               key={`${book.name}-${book.checksum}`}
-              onPress={() =>
+              onPress={() => {
+                if (book.missing) {
+                  Alert.alert(
+                    "Files Missing",
+                    `The audio files for "${book.name}" can no longer be found. They may have been moved or deleted.\n\nPlease re-add the audiobook from its new location.`,
+                    [
+                      { text: "OK", style: "cancel" },
+                      { text: "Remove", style: "destructive", onPress: () => handleRemove(book) },
+                    ]
+                  );
+                  return;
+                }
                 router.push({
                   pathname: "/player",
                   params: {
                     bookKey: `${book.name}::${book.checksum}`,
                   },
-                })
-              }
+                });
+              }}
               onLongPress={() => {
                 if (book.convexId) {
                   Alert.alert(book.name, "Choose an action", [
@@ -266,29 +290,48 @@ export default function LibraryScreen() {
                   handleRemove(book);
                 }
               }}
-              className="flex-row items-center p-4 mb-2 rounded-xl border border-gray-200 bg-white"
+              className="flex-row items-center p-4 mb-2 rounded-xl border bg-white"
+              style={{ borderColor: book.missing ? "#fca5a5" : "#e5e7eb" }}
             >
-              <View className="w-12 h-12 rounded-lg bg-orange-50 items-center justify-center mr-3">
-                <Ionicons name="book" size={24} color="#f97316" />
+              <View
+                className="w-12 h-12 rounded-lg items-center justify-center mr-3"
+                style={{ backgroundColor: book.missing ? "#fef2f2" : "#fff7ed" }}
+              >
+                <Ionicons
+                  name={book.missing ? "warning" : "book"}
+                  size={24}
+                  color={book.missing ? "#ef4444" : "#f97316"}
+                />
               </View>
               <View className="flex-1">
                 <Text
-                  className="text-sm font-medium text-gray-900"
+                  className="text-sm font-medium"
+                  style={{ color: book.missing ? "#9ca3af" : "#111827" }}
                   numberOfLines={1}
                 >
                   {book.name}
                 </Text>
-                <Text className="text-xs text-gray-500">
-                  {book.chapters.length} chapter
-                  {book.chapters.length !== 1 ? "s" : ""}
-                  {book.convexId ? (
-                    <Text className="text-green-600"> · Synced</Text>
-                  ) : (
-                    <Text className="text-yellow-600"> · Local</Text>
-                  )}
-                </Text>
+                {book.missing ? (
+                  <Text className="text-xs" style={{ color: "#ef4444" }}>
+                    Files missing — tap to learn more
+                  </Text>
+                ) : (
+                  <Text className="text-xs text-gray-500">
+                    {book.chapters.length} chapter
+                    {book.chapters.length !== 1 ? "s" : ""}
+                    {book.convexId ? (
+                      <Text className="text-green-600"> · Synced</Text>
+                    ) : (
+                      <Text className="text-yellow-600"> · Local</Text>
+                    )}
+                  </Text>
+                )}
               </View>
-              <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+              <Ionicons
+                name={book.missing ? "alert-circle" : "chevron-forward"}
+                size={16}
+                color={book.missing ? "#ef4444" : "#9ca3af"}
+              />
             </TouchableOpacity>
           ))
         )}

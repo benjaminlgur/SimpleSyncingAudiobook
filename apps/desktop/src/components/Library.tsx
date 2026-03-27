@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { pickAudiobookFolder, pickAudiobookFile, scanAudiobookFolder, scanM4bFile, extractCoverArt } from "../lib/tauri-fs";
+import { pickAudiobookFolder, pickAudiobookFile, scanAudiobookFolder, scanM4bFile, extractCoverArt, checkPathExists } from "../lib/tauri-fs";
 import type { LocalAudiobook } from "./AppShell";
 import { LinkingDialog } from "./LinkingDialog";
 
@@ -10,6 +10,7 @@ interface LibraryProps {
   onAddBook: (book: LocalAudiobook) => void;
   onSelectBook: (book: LocalAudiobook) => void;
   onRemoveBook: (book: LocalAudiobook) => void;
+  onRelocateBook: (book: LocalAudiobook, newFolderPath: string) => void;
   onDisconnect: () => void;
 }
 
@@ -58,11 +59,43 @@ export function Library({
   onAddBook,
   onSelectBook,
   onRemoveBook,
+  onRelocateBook,
   onDisconnect,
 }: LibraryProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
+
+  const handleRelocate = async (book: LocalAudiobook) => {
+    const isM4b = book.chapters.length > 0 &&
+      book.chapters[0].filename === book.chapters[book.chapters.length - 1].filename;
+
+    let newPath: string | null;
+    if (isM4b) {
+      newPath = await pickAudiobookFile();
+      if (newPath) {
+        const sepIdx = Math.max(newPath.lastIndexOf("/"), newPath.lastIndexOf("\\"));
+        newPath = sepIdx > 0 ? newPath.substring(0, sepIdx) : newPath;
+      }
+    } else {
+      newPath = await pickAudiobookFolder();
+    }
+
+    if (!newPath) return;
+
+    const firstFile = book.chapters[0]?.filename;
+    if (firstFile) {
+      const sep = newPath.includes("\\") ? "\\" : "/";
+      const testPath = `${newPath}${sep}${firstFile}`;
+      const found = await checkPathExists(testPath);
+      if (!found) {
+        alert(`Could not find "${firstFile}" in the selected location. Please choose the correct folder.`);
+        return;
+      }
+    }
+
+    onRelocateBook(book, newPath);
+  };
 
   const handleAddFolder = async () => {
     setIsScanning(true);
@@ -174,28 +207,57 @@ export function Library({
                 key={`${book.name}-${book.checksum}`}
                 role="button"
                 tabIndex={0}
-                onClick={() => onSelectBook(book)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelectBook(book); }}
-                className="group w-full text-left rounded-lg border border-border bg-card p-4 hover:border-primary/50 hover:shadow-sm transition-all cursor-pointer"
+                onClick={() => !book.missing && onSelectBook(book)}
+                onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !book.missing) onSelectBook(book); }}
+                className={`group w-full text-left rounded-lg border p-4 transition-all ${
+                  book.missing
+                    ? "border-destructive/30 bg-destructive/5 cursor-default"
+                    : "border-border bg-card hover:border-primary/50 hover:shadow-sm cursor-pointer"
+                }`}
               >
                 <div className="flex items-center gap-3">
-                  <BookThumbnail book={book} />
+                  {book.missing ? (
+                    <div className="flex-shrink-0 w-12 h-12 rounded-md bg-destructive/10 flex items-center justify-center">
+                      <svg className="h-6 w-6 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                      </svg>
+                    </div>
+                  ) : (
+                    <BookThumbnail book={book} />
+                  )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
+                    <p className={`text-sm font-medium truncate ${book.missing ? "text-muted-foreground" : "text-foreground"}`}>
                       {book.name}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      {book.chapters.length} chapter
-                      {book.chapters.length !== 1 ? "s" : ""}
-                      {book.convexId ? (
-                        <span className="ml-2 text-green-600">Synced</span>
-                      ) : (
-                        <span className="ml-2 text-yellow-600">Local only</span>
-                      )}
-                    </p>
+                    {book.missing ? (
+                      <p className="text-xs text-destructive">
+                        Files missing — folder moved or deleted
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        {book.chapters.length} chapter
+                        {book.chapters.length !== 1 ? "s" : ""}
+                        {book.convexId ? (
+                          <span className="ml-2 text-green-600">Synced</span>
+                        ) : (
+                          <span className="ml-2 text-yellow-600">Local only</span>
+                        )}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                    {book.convexId && (
+                    {book.missing && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRelocate(book);
+                        }}
+                        className="px-2.5 py-1 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                      >
+                        Relocate
+                      </button>
+                    )}
+                    {book.convexId && !book.missing && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

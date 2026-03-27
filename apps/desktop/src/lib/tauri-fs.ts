@@ -1,4 +1,4 @@
-import { readDir, readFile, stat } from "@tauri-apps/plugin-fs";
+import { readDir, readFile, stat, exists } from "@tauri-apps/plugin-fs";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { computeChecksum } from "@audiobook/shared";
@@ -37,6 +37,14 @@ function parentDir(filePath: string): string {
 function baseName(filePath: string): string {
   const sepIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
   return sepIdx >= 0 ? filePath.substring(sepIdx + 1) : filePath;
+}
+
+export async function checkPathExists(path: string): Promise<boolean> {
+  try {
+    return await exists(path);
+  } catch {
+    return false;
+  }
 }
 
 export async function pickAudiobookFolder(): Promise<string | null> {
@@ -169,6 +177,13 @@ export async function scanM4bFile(
 let currentBlobUrl: string | null = null;
 let currentBlobFile: string | null = null;
 
+export class FileNotFoundError extends Error {
+  constructor(path: string) {
+    super(`Audiobook files not found — folder may have been moved or deleted.\n${path}`);
+    this.name = "FileNotFoundError";
+  }
+}
+
 export async function loadAudioFileAsBlob(
   folderPath: string,
   filename: string
@@ -183,6 +198,11 @@ export async function loadAudioFileAsBlob(
     URL.revokeObjectURL(currentBlobUrl);
     currentBlobUrl = null;
     currentBlobFile = null;
+  }
+
+  const pathExists = await checkPathExists(fullPath);
+  if (!pathExists) {
+    throw new FileNotFoundError(fullPath);
   }
 
   const contents = await readFile(fullPath);

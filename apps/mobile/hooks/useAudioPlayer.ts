@@ -16,6 +16,7 @@ export interface MobilePlayerState {
   durationMs: number;
   playbackSpeed: number;
   isLoading: boolean;
+  error: string | null;
 }
 
 export interface MobilePlayerControls {
@@ -107,6 +108,7 @@ export function useMobileAudioPlayer(
   chapterChangeRef.current = onChapterChange;
 
   const [speed, setSpeedState] = useState(1.0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [virtualChapterIdx, setVirtualChapterIdx] = useState(initialChapterIndex);
   const virtualIdxRef = useRef(virtualChapterIdx);
   virtualIdxRef.current = virtualChapterIdx;
@@ -114,42 +116,50 @@ export function useMobileAudioPlayer(
   useEffect(() => {
     let mounted = true;
     (async () => {
-      await setupPlayer();
-      await TrackPlayer.reset();
+      try {
+        await setupPlayer();
+        await TrackPlayer.reset();
 
-      if (virtual) {
-        const track = {
-          id: "m4b-single",
-          url: fileUris[0],
-          title: chapters[0]?.title || "Audiobook",
-          artist: "Audiobook",
-        };
-        await TrackPlayer.add([track]);
+        if (virtual) {
+          const track = {
+            id: "m4b-single",
+            url: fileUris[0],
+            title: chapters[0]?.title || "Audiobook",
+            artist: "Audiobook",
+          };
+          await TrackPlayer.add([track]);
 
-        const ch = chapters[initialChapterIndex];
-        const absoluteMs = (ch?.startMs || 0) + initialPositionMs;
-        await TrackPlayer.seekTo(absoluteMs / 1000);
-      } else {
-        const tracks = fileUris.map((uri, i) => ({
-          id: `chapter-${i}`,
-          url: uri,
-          title:
-            chapters[i]?.title ||
-            chapters[i]?.filename?.replace(/\.[^/.]+$/, "") ||
-            `Chapter ${i + 1}`,
-          artist: "Audiobook",
-        }));
-        await TrackPlayer.add(tracks);
+          const ch = chapters[initialChapterIndex];
+          const absoluteMs = (ch?.startMs || 0) + initialPositionMs;
+          await TrackPlayer.seekTo(absoluteMs / 1000);
+        } else {
+          const tracks = fileUris.map((uri, i) => ({
+            id: `chapter-${i}`,
+            url: uri,
+            title:
+              chapters[i]?.title ||
+              chapters[i]?.filename?.replace(/\.[^/.]+$/, "") ||
+              `Chapter ${i + 1}`,
+            artist: "Audiobook",
+          }));
+          await TrackPlayer.add(tracks);
 
-        if (initialChapterIndex > 0) {
-          await TrackPlayer.skip(initialChapterIndex);
+          if (initialChapterIndex > 0) {
+            await TrackPlayer.skip(initialChapterIndex);
+          }
+          if (initialPositionMs > 0) {
+            await TrackPlayer.seekTo(initialPositionMs / 1000);
+          }
         }
-        if (initialPositionMs > 0) {
-          await TrackPlayer.seekTo(initialPositionMs / 1000);
+
+        if (mounted) setReady(true);
+      } catch (err) {
+        if (mounted) {
+          const msg = err instanceof Error ? err.message : "Failed to load audio files";
+          setLoadError(msg);
+          setReady(true);
         }
       }
-
-      if (mounted) setReady(true);
     })();
 
     return () => {
@@ -214,6 +224,10 @@ export function useMobileAudioPlayer(
     durationMs = progress.duration * 1000;
   }
 
+  const playbackError = playbackState.state === State.Error
+    ? "Playback error — audio files may be unavailable"
+    : null;
+
   const state: MobilePlayerState = {
     isPlaying,
     currentChapterIndex,
@@ -221,6 +235,7 @@ export function useMobileAudioPlayer(
     durationMs,
     playbackSpeed: speed,
     isLoading: !ready || playbackState.state === State.Buffering,
+    error: loadError || playbackError,
   };
 
   const controls: MobilePlayerControls = {
