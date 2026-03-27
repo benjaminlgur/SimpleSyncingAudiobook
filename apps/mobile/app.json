@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Audiobook Player",
+    "slug": "audiobook-player",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "audiobook-player",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#f97316"
+      },
+      "package": "com.audiobook.player"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-document-picker"
+    ]
+  }
+}
