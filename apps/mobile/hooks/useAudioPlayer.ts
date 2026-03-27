@@ -62,9 +62,12 @@ async function setupPlayer() {
     });
     isSetup = true;
   } catch {
-    // Already setup
     isSetup = true;
   }
+}
+
+function isVirtualChapter(ch: ChapterInfo): boolean {
+  return ch.startMs !== undefined && ch.endMs !== undefined;
 }
 
 interface UseAudioPlayerOptions {
@@ -92,14 +95,21 @@ export function useMobileAudioPlayer(
     onPlay,
   } = options;
 
+  const virtual = chapters.length > 0 && isVirtualChapter(chapters[0]);
+
   const [ready, setReady] = useState(false);
   const playbackState = usePlaybackState();
-  const progress = useProgress(1000);
+  const progress = useProgress(250);
   const activeTrack = useActiveTrack();
   const positionCallbackRef = useRef(onPositionUpdate);
   positionCallbackRef.current = onPositionUpdate;
+  const chapterChangeRef = useRef(onChapterChange);
+  chapterChangeRef.current = onChapterChange;
 
   const [speed, setSpeedState] = useState(1.0);
+  const [virtualChapterIdx, setVirtualChapterIdx] = useState(initialChapterIndex);
+  const virtualIdxRef = useRef(virtualChapterIdx);
+  virtualIdxRef.current = virtualChapterIdx;
 
   useEffect(() => {
     let mounted = true;
@@ -107,22 +117,36 @@ export function useMobileAudioPlayer(
       await setupPlayer();
       await TrackPlayer.reset();
 
-      const tracks = fileUris.map((uri, i) => ({
-        id: `chapter-${i}`,
-        url: uri,
-        title:
-          chapters[i]?.filename?.replace(/\.[^/.]+$/, "") ||
-          `Chapter ${i + 1}`,
-        artist: "Audiobook",
-      }));
+      if (virtual) {
+        const track = {
+          id: "m4b-single",
+          url: fileUris[0],
+          title: chapters[0]?.title || "Audiobook",
+          artist: "Audiobook",
+        };
+        await TrackPlayer.add([track]);
 
-      await TrackPlayer.add(tracks);
+        const ch = chapters[initialChapterIndex];
+        const absoluteMs = (ch?.startMs || 0) + initialPositionMs;
+        await TrackPlayer.seekTo(absoluteMs / 1000);
+      } else {
+        const tracks = fileUris.map((uri, i) => ({
+          id: `chapter-${i}`,
+          url: uri,
+          title:
+            chapters[i]?.title ||
+            chapters[i]?.filename?.replace(/\.[^/.]+$/, "") ||
+            `Chapter ${i + 1}`,
+          artist: "Audiobook",
+        }));
+        await TrackPlayer.add(tracks);
 
-      if (initialChapterIndex > 0) {
-        await TrackPlayer.skip(initialChapterIndex);
-      }
-      if (initialPositionMs > 0) {
-        await TrackPlayer.seekTo(initialPositionMs / 1000);
+        if (initialChapterIndex > 0) {
+          await TrackPlayer.skip(initialChapterIndex);
+        }
+        if (initialPositionMs > 0) {
+          await TrackPlayer.seekTo(initialPositionMs / 1000);
+        }
       }
 
       if (mounted) setReady(true);
@@ -131,32 +155,70 @@ export function useMobileAudioPlayer(
     return () => {
       mounted = false;
     };
-    // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Position update callback
+  // Position update + virtual chapter boundary detection
   useEffect(() => {
     if (!ready) return;
-    const currentIndex = activeTrack
+
+    if (virtual) {
+      const absoluteMs = progress.position * 1000;
+      const ch = chapters[virtualIdxRef.current];
+      if (!ch) return;
+
+      const posMs = Math.max(0, absoluteMs - (ch.startMs || 0));
+
+      if (absoluteMs >= (ch.endMs || Infinity)) {
+        const nextIdx = virtualIdxRef.current + 1;
+        if (nextIdx < chapters.length) {
+          setVirtualChapterIdx(nextIdx);
+          virtualIdxRef.current = nextIdx;
+          chapterChangeRef.current?.(nextIdx);
+          const nextCh = chapters[nextIdx];
+          TrackPlayer.seekTo((nextCh.startMs || 0) / 1000);
+        } else {
+          TrackPlayer.pause();
+        }
+        return;
+      }
+
+      positionCallbackRef.current?.(virtualIdxRef.current, posMs);
+    } else {
+      const currentIndex = activeTrack
+        ? parseInt(activeTrack.id?.replace("chapter-", "") || "0")
+        : 0;
+      positionCallbackRef.current?.(currentIndex, progress.position * 1000);
+    }
+  }, [progress.position, activeTrack, ready, virtual, chapters]);
+
+  const currentChapterIndex = virtual
+    ? virtualChapterIdx
+    : activeTrack
       ? parseInt(activeTrack.id?.replace("chapter-", "") || "0")
       : 0;
-    positionCallbackRef.current?.(currentIndex, progress.position * 1000);
-  }, [progress.position, activeTrack, ready]);
-
-  const currentChapterIndex = activeTrack
-    ? parseInt(activeTrack.id?.replace("chapter-", "") || "0")
-    : 0;
 
   const isPlaying =
     playbackState.state === State.Playing ||
     playbackState.state === State.Buffering;
 
+  let positionMs: number;
+  let durationMs: number;
+  if (virtual) {
+    const ch = chapters[virtualChapterIdx];
+    const absoluteMs = progress.position * 1000;
+    positionMs = ch ? Math.max(0, absoluteMs - (ch.startMs || 0)) : 0;
+    durationMs = ch ? (ch.endMs || 0) - (ch.startMs || 0) : 0;
+  } else {
+    positionMs = progress.position * 1000;
+    durationMs = progress.duration * 1000;
+  }
+
   const state: MobilePlayerState = {
     isPlaying,
     currentChapterIndex,
-    positionMs: progress.position * 1000,
-    durationMs: progress.duration * 1000,
+    positionMs,
+    durationMs,
     playbackSpeed: speed,
     isLoading: !ready || playbackState.state === State.Buffering,
   };
@@ -173,8 +235,8 @@ export function useMobileAudioPlayer(
     }, [onPause]),
 
     togglePlayPause: useCallback(async () => {
-      const state = await TrackPlayer.getPlaybackState();
-      if (state.state === State.Playing) {
+      const st = await TrackPlayer.getPlaybackState();
+      if (st.state === State.Playing) {
         await TrackPlayer.pause();
         onPause?.();
       } else {
@@ -184,50 +246,101 @@ export function useMobileAudioPlayer(
     }, [onPause, onPlay]),
 
     seekTo: useCallback(async (ms: number) => {
-      await TrackPlayer.seekTo(ms / 1000);
-    }, []),
+      if (virtual) {
+        const ch = chapters[virtualIdxRef.current];
+        if (ch) {
+          await TrackPlayer.seekTo(((ch.startMs || 0) + ms) / 1000);
+        }
+      } else {
+        await TrackPlayer.seekTo(ms / 1000);
+      }
+    }, [virtual, chapters]),
 
     seekBy: useCallback(async (deltaMs: number) => {
       const pos = await TrackPlayer.getPosition();
-      await TrackPlayer.seekTo(Math.max(0, pos + deltaMs / 1000));
-    }, []),
+      if (virtual) {
+        const ch = chapters[virtualIdxRef.current];
+        if (ch) {
+          const newMs = Math.max(
+            ch.startMs || 0,
+            Math.min(ch.endMs || Infinity, pos * 1000 + deltaMs)
+          );
+          await TrackPlayer.seekTo(newMs / 1000);
+        }
+      } else {
+        await TrackPlayer.seekTo(Math.max(0, pos + deltaMs / 1000));
+      }
+    }, [virtual, chapters]),
 
     skipToChapter: useCallback(
       async (index: number, seekMs?: number) => {
-        await TrackPlayer.skip(index);
-        if (seekMs && seekMs > 0) {
-          await TrackPlayer.seekTo(seekMs / 1000);
+        if (virtual) {
+          const ch = chapters[index];
+          if (ch) {
+            setVirtualChapterIdx(index);
+            virtualIdxRef.current = index;
+            const absoluteMs = (ch.startMs || 0) + (seekMs || 0);
+            await TrackPlayer.seekTo(absoluteMs / 1000);
+            onChapterChange?.(index);
+          }
+        } else {
+          await TrackPlayer.skip(index);
+          if (seekMs && seekMs > 0) {
+            await TrackPlayer.seekTo(seekMs / 1000);
+          }
+          onChapterChange?.(index);
         }
-        onChapterChange?.(index);
       },
-      [onChapterChange]
+      [virtual, chapters, onChapterChange]
     ),
 
     nextChapter: useCallback(async () => {
-      try {
-        await TrackPlayer.skipToNext();
-        const track = await TrackPlayer.getActiveTrack();
-        if (track) {
-          const idx = parseInt(track.id?.replace("chapter-", "") || "0");
-          onChapterChange?.(idx);
+      if (virtual) {
+        const nextIdx = virtualIdxRef.current + 1;
+        if (nextIdx < chapters.length) {
+          setVirtualChapterIdx(nextIdx);
+          virtualIdxRef.current = nextIdx;
+          const ch = chapters[nextIdx];
+          await TrackPlayer.seekTo((ch.startMs || 0) / 1000);
+          onChapterChange?.(nextIdx);
         }
-      } catch {
-        // No next track
+      } else {
+        try {
+          await TrackPlayer.skipToNext();
+          const track = await TrackPlayer.getActiveTrack();
+          if (track) {
+            const idx = parseInt(track.id?.replace("chapter-", "") || "0");
+            onChapterChange?.(idx);
+          }
+        } catch {
+          // No next track
+        }
       }
-    }, [onChapterChange]),
+    }, [virtual, chapters, onChapterChange]),
 
     prevChapter: useCallback(async () => {
-      try {
-        await TrackPlayer.skipToPrevious();
-        const track = await TrackPlayer.getActiveTrack();
-        if (track) {
-          const idx = parseInt(track.id?.replace("chapter-", "") || "0");
-          onChapterChange?.(idx);
+      if (virtual) {
+        const prevIdx = virtualIdxRef.current - 1;
+        if (prevIdx >= 0) {
+          setVirtualChapterIdx(prevIdx);
+          virtualIdxRef.current = prevIdx;
+          const ch = chapters[prevIdx];
+          await TrackPlayer.seekTo((ch.startMs || 0) / 1000);
+          onChapterChange?.(prevIdx);
         }
-      } catch {
-        // No previous track
+      } else {
+        try {
+          await TrackPlayer.skipToPrevious();
+          const track = await TrackPlayer.getActiveTrack();
+          if (track) {
+            const idx = parseInt(track.id?.replace("chapter-", "") || "0");
+            onChapterChange?.(idx);
+          }
+        } catch {
+          // No previous track
+        }
       }
-    }, [onChapterChange]),
+    }, [virtual, chapters, onChapterChange]),
 
     setSpeed: useCallback(async (s: number) => {
       await TrackPlayer.setRate(s);

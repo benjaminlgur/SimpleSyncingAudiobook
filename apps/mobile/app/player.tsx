@@ -278,6 +278,7 @@ function PlayerInner({
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =
+    currentChapter?.title ||
     currentChapter?.filename?.replace(/\.[^/.]+$/, "") ||
     `Chapter ${playerState.currentChapterIndex + 1}`;
 
@@ -522,6 +523,7 @@ function PlayerInner({
               keyExtractor={(item) => `ch-${item.index}`}
               renderItem={({ item }) => {
                 const label =
+                  item.title ||
                   item.filename?.replace(/\.[^/.]+$/, "") ||
                   `Chapter ${item.index + 1}`;
                 const isCurrent =

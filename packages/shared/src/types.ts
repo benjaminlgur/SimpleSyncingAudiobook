@@ -1,7 +1,10 @@
 export interface ChapterInfo {
   index: number;
   filename: string;
+  title?: string;
   durationMs?: number;
+  startMs?: number;
+  endMs?: number;
 }
 
 export interface AudiobookMeta {

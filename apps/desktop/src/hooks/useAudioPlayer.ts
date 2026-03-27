@@ -35,6 +35,10 @@ interface UseAudioPlayerOptions {
   onPlay?: () => void;
 }
 
+function isVirtualChapter(ch: ChapterInfo): boolean {
+  return ch.startMs !== undefined && ch.endMs !== undefined;
+}
+
 export function useAudioPlayer(
   options: UseAudioPlayerOptions
 ): [AudioPlayerState, AudioPlayerControls] {
@@ -51,6 +55,7 @@ export function useAudioPlayer(
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const positionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loadedFileRef = useRef<string | null>(null);
 
   const [state, setState] = useState<AudioPlayerState>({
     isPlaying: false,
@@ -76,6 +81,9 @@ export function useAudioPlayer(
     async (index: number, seekMs = 0) => {
       if (index < 0 || index >= chapters.length) return;
 
+      const chapter = chapters[index];
+      const virtual = isVirtualChapter(chapter);
+
       setState((s) => ({
         ...s,
         isLoading: true,
@@ -85,52 +93,67 @@ export function useAudioPlayer(
 
       const audio = getOrCreateAudio();
       const wasPlaying = !audio.paused;
-      audio.pause();
 
-      try {
-        const blobUrl = await loadAudioFileAsBlob(
-          folderPath,
-          chapters[index].filename
-        );
-        audio.src = blobUrl;
-        audio.playbackRate = stateRef.current.playbackSpeed;
+      const sameFile = loadedFileRef.current === chapter.filename && audio.src;
 
-        await new Promise<void>((resolve, reject) => {
-          const onLoaded = () => {
-            cleanup();
-            resolve();
-          };
-          const onError = () => {
-            cleanup();
-            reject(
-              new Error(
-                audio.error?.message || "Audio element failed to decode file"
-              )
-            );
-          };
-          const cleanup = () => {
-            audio.removeEventListener("loadedmetadata", onLoaded);
-            audio.removeEventListener("error", onError);
-          };
-          audio.addEventListener("loadedmetadata", onLoaded);
-          audio.addEventListener("error", onError);
-          audio.load();
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to load audio";
-        console.error("loadChapter failed:", msg);
-        setState((s) => ({ ...s, isLoading: false, error: msg }));
-        return;
+      if (!sameFile) {
+        audio.pause();
+        try {
+          const blobUrl = await loadAudioFileAsBlob(folderPath, chapter.filename);
+          audio.src = blobUrl;
+          audio.playbackRate = stateRef.current.playbackSpeed;
+          loadedFileRef.current = chapter.filename;
+
+          await new Promise<void>((resolve, reject) => {
+            const onLoaded = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = () => {
+              cleanup();
+              reject(
+                new Error(
+                  audio.error?.message || "Audio element failed to decode file"
+                )
+              );
+            };
+            const cleanup = () => {
+              audio.removeEventListener("loadedmetadata", onLoaded);
+              audio.removeEventListener("error", onError);
+            };
+            audio.addEventListener("loadedmetadata", onLoaded);
+            audio.addEventListener("error", onError);
+            audio.load();
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to load audio";
+          console.error("loadChapter failed:", msg);
+          setState((s) => ({ ...s, isLoading: false, error: msg }));
+          loadedFileRef.current = null;
+          return;
+        }
       }
 
-      audio.currentTime = seekMs / 1000;
-      setState((s) => ({
-        ...s,
-        isLoading: false,
-        durationMs: (audio.duration || 0) * 1000,
-        positionMs: seekMs,
-        currentChapterIndex: index,
-      }));
+      if (virtual) {
+        audio.currentTime = (chapter.startMs! + seekMs) / 1000;
+        const chapterDuration = chapter.endMs! - chapter.startMs!;
+        setState((s) => ({
+          ...s,
+          isLoading: false,
+          durationMs: chapterDuration,
+          positionMs: seekMs,
+          currentChapterIndex: index,
+        }));
+      } else {
+        audio.currentTime = seekMs / 1000;
+        setState((s) => ({
+          ...s,
+          isLoading: false,
+          durationMs: (audio.duration || 0) * 1000,
+          positionMs: seekMs,
+          currentChapterIndex: index,
+        }));
+      }
 
       if (wasPlaying) {
         try {
@@ -144,8 +167,12 @@ export function useAudioPlayer(
     [chapters, folderPath, getOrCreateAudio]
   );
 
-  // Set up ended listener for auto-advance
+  // Auto-advance: for non-virtual chapters use the "ended" event,
+  // for virtual chapters use the position timer below.
   useEffect(() => {
+    const ch0 = chapters[0];
+    if (ch0 && isVirtualChapter(ch0)) return;
+
     const audio = getOrCreateAudio();
     const handleEnded = () => {
       const nextIndex = stateRef.current.currentChapterIndex + 1;
@@ -158,27 +185,51 @@ export function useAudioPlayer(
     };
     audio.addEventListener("ended", handleEnded);
     return () => audio.removeEventListener("ended", handleEnded);
-  }, [chapters.length, getOrCreateAudio, loadChapter, onChapterChange]);
+  }, [chapters, getOrCreateAudio, loadChapter, onChapterChange]);
 
-  // Position tracking timer
+  // Position tracking timer (handles both modes + virtual chapter auto-advance)
   useEffect(() => {
     positionTimerRef.current = setInterval(() => {
       const audio = audioRef.current;
       if (!audio || audio.paused) return;
-      const posMs = audio.currentTime * 1000;
-      setState((s) => ({ ...s, positionMs: posMs }));
-      onPositionUpdate?.(stateRef.current.currentChapterIndex, posMs);
-    }, 1000);
+
+      const idx = stateRef.current.currentChapterIndex;
+      const chapter = chapters[idx];
+      if (!chapter) return;
+
+      if (isVirtualChapter(chapter)) {
+        const absoluteMs = audio.currentTime * 1000;
+        const posMs = Math.max(0, absoluteMs - chapter.startMs!);
+
+        if (absoluteMs >= chapter.endMs!) {
+          const nextIndex = idx + 1;
+          if (nextIndex < chapters.length) {
+            loadChapter(nextIndex, 0);
+            onChapterChange?.(nextIndex);
+          } else {
+            audio.pause();
+            setState((s) => ({ ...s, isPlaying: false }));
+          }
+          return;
+        }
+
+        setState((s) => ({ ...s, positionMs: posMs }));
+        onPositionUpdate?.(idx, posMs);
+      } else {
+        const posMs = audio.currentTime * 1000;
+        setState((s) => ({ ...s, positionMs: posMs }));
+        onPositionUpdate?.(idx, posMs);
+      }
+    }, 250);
 
     return () => {
       if (positionTimerRef.current) clearInterval(positionTimerRef.current);
     };
-  }, [onPositionUpdate]);
+  }, [chapters, onPositionUpdate, loadChapter, onChapterChange]);
 
   // Load initial chapter
   useEffect(() => {
     loadChapter(initialChapterIndex, initialPositionMs);
-    // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -187,6 +238,7 @@ export function useAudioPlayer(
     return () => {
       audioRef.current?.pause();
       audioRef.current = null;
+      loadedFileRef.current = null;
       revokeCurrentAudioBlob();
     };
   }, []);
@@ -219,20 +271,39 @@ export function useAudioPlayer(
     seekTo: useCallback((ms: number) => {
       const audio = audioRef.current;
       if (!audio) return;
-      audio.currentTime = ms / 1000;
-      setState((s) => ({ ...s, positionMs: ms }));
-    }, []),
+      const chapter = chapters[stateRef.current.currentChapterIndex];
+      if (chapter && isVirtualChapter(chapter)) {
+        const absoluteMs = chapter.startMs! + ms;
+        audio.currentTime = absoluteMs / 1000;
+        setState((s) => ({ ...s, positionMs: ms }));
+      } else {
+        audio.currentTime = ms / 1000;
+        setState((s) => ({ ...s, positionMs: ms }));
+      }
+    }, [chapters]),
 
     seekBy: useCallback((deltaMs: number) => {
       const audio = audioRef.current;
       if (!audio) return;
-      const newTime = Math.max(
-        0,
-        Math.min(audio.duration, audio.currentTime + deltaMs / 1000)
-      );
-      audio.currentTime = newTime;
-      setState((s) => ({ ...s, positionMs: newTime * 1000 }));
-    }, []),
+      const chapter = chapters[stateRef.current.currentChapterIndex];
+
+      if (chapter && isVirtualChapter(chapter)) {
+        const absoluteMs = audio.currentTime * 1000;
+        const newAbsoluteMs = Math.max(
+          chapter.startMs!,
+          Math.min(chapter.endMs!, absoluteMs + deltaMs)
+        );
+        audio.currentTime = newAbsoluteMs / 1000;
+        setState((s) => ({ ...s, positionMs: newAbsoluteMs - chapter.startMs! }));
+      } else {
+        const newTime = Math.max(
+          0,
+          Math.min(audio.duration, audio.currentTime + deltaMs / 1000)
+        );
+        audio.currentTime = newTime;
+        setState((s) => ({ ...s, positionMs: newTime * 1000 }));
+      }
+    }, [chapters]),
 
     skipToChapter: useCallback(
       (index: number, seekMs?: number) => {

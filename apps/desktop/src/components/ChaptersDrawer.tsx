@@ -48,6 +48,7 @@ export function ChaptersDrawer({
         <div className="overflow-auto flex-1 p-2">
           {chapters.map((chapter) => {
             const label =
+              chapter.title ||
               chapter.filename?.replace(/\.[^/.]+$/, "") ||
               `Chapter ${chapter.index + 1}`;
             const isCurrent = chapter.index === currentIndex;

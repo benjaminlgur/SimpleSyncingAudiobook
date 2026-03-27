@@ -5,7 +5,10 @@ import type { Id } from "./_generated/dataModel";
 const chapterValidator = v.object({
   index: v.number(),
   filename: v.string(),
+  title: v.optional(v.string()),
   durationMs: v.optional(v.number()),
+  startMs: v.optional(v.number()),
+  endMs: v.optional(v.number()),
 });
 
 const audiobookReturnValidator = v.object({

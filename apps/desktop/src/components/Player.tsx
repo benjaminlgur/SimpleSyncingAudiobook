@@ -340,6 +340,7 @@ function PlayerInner({
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =
+    currentChapter?.title ||
     currentChapter?.filename?.replace(/\.[^/.]+$/, "") ||
     `Chapter ${playerState.currentChapterIndex + 1}`;
 

@@ -29,8 +29,27 @@ function joinPath(folder: string, file: string): string {
   return `${folder}${sep}${file}`;
 }
 
+function parentDir(filePath: string): string {
+  const sepIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return sepIdx > 0 ? filePath.substring(0, sepIdx) : filePath;
+}
+
+function baseName(filePath: string): string {
+  const sepIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return sepIdx >= 0 ? filePath.substring(sepIdx + 1) : filePath;
+}
+
 export async function pickAudiobookFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false });
+  return selected as string | null;
+}
+
+export async function pickAudiobookFile(): Promise<string | null> {
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    filters: [{ name: "Audiobook", extensions: ["m4b", "m4a", "mp3"] }],
+  });
   return selected as string | null;
 }
 
@@ -78,23 +97,100 @@ export async function scanAudiobookFolder(
   };
 }
 
+function chapterStartSec(ch: { sampleOffset: number; start?: number; timescale?: number }, sampleRate: number): number {
+  if (ch.start !== undefined && ch.timescale !== undefined && ch.timescale > 0) {
+    return ch.start / ch.timescale;
+  }
+  return ch.sampleOffset / (sampleRate || 44100);
+}
+
+export async function scanM4bFile(
+  filePath: string
+): Promise<AudiobookMeta | null> {
+  const fileStat = await stat(filePath);
+  const data = await readFile(filePath);
+
+  const { parseBuffer } = await import("music-metadata");
+  const metadata = await parseBuffer(data, {
+    mimeType: "audio/mp4",
+    size: fileStat.size,
+  });
+
+  const totalDurationMs = (metadata.format.duration || 0) * 1000;
+  const sampleRate = metadata.format.sampleRate || 44100;
+  const fileName = baseName(filePath);
+  const bookName = fileName.replace(/\.[^/.]+$/, "");
+  const folder = parentDir(filePath);
+
+  let chapters: ChapterInfo[];
+
+  const rawChapters = (metadata as { chapters?: Array<{ sampleOffset: number; title?: string; start?: number; timescale?: number }> }).chapters;
+
+  if (rawChapters && rawChapters.length > 1) {
+    chapters = rawChapters.map((ch, i) => {
+      const startSec = chapterStartSec(ch, sampleRate);
+      const startMs = Math.round(startSec * 1000);
+      const nextStartSec = i + 1 < rawChapters.length
+        ? chapterStartSec(rawChapters[i + 1], sampleRate)
+        : (totalDurationMs / 1000);
+      const endMs = Math.round(nextStartSec * 1000);
+
+      return {
+        index: i,
+        filename: fileName,
+        title: ch.title || `Chapter ${i + 1}`,
+        startMs,
+        endMs,
+        durationMs: endMs - startMs,
+      };
+    });
+  } else {
+    chapters = [{
+      index: 0,
+      filename: fileName,
+      title: bookName,
+      startMs: 0,
+      endMs: Math.round(totalDurationMs),
+      durationMs: Math.round(totalDurationMs),
+    }];
+  }
+
+  const fileInfos: FileInfo[] = [{ name: fileName, size: fileStat.size }];
+  const checksum = computeChecksum(fileInfos);
+
+  return {
+    name: bookName,
+    checksum,
+    chapters,
+    folderPath: folder,
+  };
+}
+
 let currentBlobUrl: string | null = null;
+let currentBlobFile: string | null = null;
 
 export async function loadAudioFileAsBlob(
   folderPath: string,
   filename: string
 ): Promise<string> {
+  const fullPath = joinPath(folderPath, filename);
+
+  if (currentBlobUrl && currentBlobFile === fullPath) {
+    return currentBlobUrl;
+  }
+
   if (currentBlobUrl) {
     URL.revokeObjectURL(currentBlobUrl);
     currentBlobUrl = null;
+    currentBlobFile = null;
   }
 
-  const fullPath = joinPath(folderPath, filename);
   const contents = await readFile(fullPath);
   const ext = filename.split(".").pop()?.toLowerCase() || "mp3";
   const mime = MIME_TYPES[ext] || "audio/mpeg";
   const blob = new Blob([contents], { type: mime });
   currentBlobUrl = URL.createObjectURL(blob);
+  currentBlobFile = fullPath;
   return currentBlobUrl;
 }
 
@@ -102,6 +198,7 @@ export function revokeCurrentAudioBlob() {
   if (currentBlobUrl) {
     URL.revokeObjectURL(currentBlobUrl);
     currentBlobUrl = null;
+    currentBlobFile = null;
   }
 }
 
@@ -114,7 +211,11 @@ export async function extractCoverArt(
   const cacheKey = folderPath;
   if (coverArtCache.has(cacheKey)) return coverArtCache.get(cacheKey)!;
 
+  const seen = new Set<string>();
   for (const chapter of chapters) {
+    if (seen.has(chapter.filename)) continue;
+    seen.add(chapter.filename);
+
     try {
       const ext = chapter.filename.split(".").pop()?.toLowerCase();
       if (ext !== "mp3" && ext !== "m4a" && ext !== "m4b") continue;

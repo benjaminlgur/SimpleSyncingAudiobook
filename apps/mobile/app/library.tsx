@@ -132,6 +132,75 @@ export default function LibraryScreen() {
     }
   };
 
+  const handlePickM4b = async () => {
+    setIsScanning(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["audio/mp4", "audio/x-m4b", "audio/*"],
+        multiple: false,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0)
+        return;
+
+      const asset = result.assets[0];
+      const ext = asset.name.split(".").pop()?.toLowerCase();
+      if (ext !== "m4b" && ext !== "m4a") {
+        Alert.alert("Invalid File", "Please select an M4B or M4A audiobook file.");
+        return;
+      }
+
+      const bookName = asset.name.replace(/\.[^/.]+$/, "");
+      const fileInfos: FileInfo[] = [{ name: asset.name, size: asset.size || 0 }];
+      const checksum = computeChecksum(fileInfos);
+
+      const chapters: ChapterInfo[] = [{
+        index: 0,
+        filename: asset.name,
+        title: bookName,
+        startMs: 0,
+        endMs: undefined,
+      }];
+
+      const meta: LocalAudiobook = {
+        name: bookName,
+        checksum,
+        chapters,
+        folderPath: asset.uri,
+      };
+
+      const existing = library.find(
+        (b) => b.name === meta.name && b.checksum === meta.checksum
+      );
+      if (existing) {
+        router.push({
+          pathname: "/player",
+          params: { bookKey: `${existing.name}::${existing.checksum}` },
+        });
+        return;
+      }
+
+      let convexId: string | undefined;
+      try {
+        const res = await getOrCreate({
+          name: meta.name,
+          checksum: meta.checksum,
+          chapters: meta.chapters,
+        });
+        convexId = res.audiobookId;
+      } catch {
+        // Offline
+      }
+
+      const newBook = { ...meta, convexId };
+      await saveLibrary([...library, newBook]);
+    } catch (err) {
+      console.error("Pick M4B error:", err);
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   const handleRemove = (book: LocalAudiobook) => {
     Alert.alert("Remove Audiobook", `Remove "${book.name}" from library?`, [
       { text: "Cancel", style: "cancel" },
@@ -225,24 +294,34 @@ export default function LibraryScreen() {
         )}
       </ScrollView>
 
-      {/* Add button */}
+      {/* Add buttons */}
       <View className="p-4 border-t border-gray-200">
-        <TouchableOpacity
-          onPress={handlePickFolder}
-          disabled={isScanning}
-          className="bg-primary rounded-xl py-3.5 items-center flex-row justify-center"
-        >
-          {isScanning ? (
-            <Text className="text-white font-medium text-sm">Scanning...</Text>
-          ) : (
-            <>
-              <Ionicons name="add" size={20} color="white" />
+        {isScanning ? (
+          <View className="bg-gray-200 rounded-xl py-3.5 items-center">
+            <Text className="text-gray-500 font-medium text-sm">Scanning...</Text>
+          </View>
+        ) : (
+          <View className="flex-row gap-2">
+            <TouchableOpacity
+              onPress={handlePickFolder}
+              className="flex-1 bg-primary rounded-xl py-3.5 items-center flex-row justify-center"
+            >
+              <Ionicons name="folder-open-outline" size={18} color="white" />
               <Text className="text-white font-medium text-sm ml-1">
-                Add Audio Files
+                Add Folder
               </Text>
-            </>
-          )}
-        </TouchableOpacity>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handlePickM4b}
+              className="flex-1 rounded-xl py-3.5 items-center flex-row justify-center border border-primary"
+            >
+              <Ionicons name="document-outline" size={18} color="#6366f1" />
+              <Text className="text-primary font-medium text-sm ml-1">
+                Add M4B
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {linkingBook?.convexId && (

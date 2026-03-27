@@ -9,7 +9,10 @@ export default defineSchema({
       v.object({
         index: v.number(),
         filename: v.string(),
+        title: v.optional(v.string()),
         durationMs: v.optional(v.number()),
+        startMs: v.optional(v.number()),
+        endMs: v.optional(v.number()),
       })
     ),
   })
