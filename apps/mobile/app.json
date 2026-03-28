@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "scheme": "audiobook-player",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#f97316"

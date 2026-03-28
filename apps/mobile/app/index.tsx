@@ -1,19 +1,25 @@
-import { useRouter } from "expo-router";
+import { Redirect } from "expo-router";
 import { useConvexContext } from "./_layout";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { View } from "react-native";
 import { SetupScreen } from "../components/SetupScreen";
 
 export default function IndexScreen() {
   const { convexUrl, setConvexUrl } = useConvexContext();
-  const router = useRouter();
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    if (convexUrl) {
-      router.replace("/library");
-    }
-  }, [convexUrl, router]);
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
-  if (convexUrl) return null;
+  if (!mounted) {
+    return <View style={{ flex: 1, backgroundColor: "#fff" }} />;
+  }
+
+  if (convexUrl) {
+    return <Redirect href="/library" />;
+  }
 
   return <SetupScreen onConnect={setConvexUrl} />;
 }
