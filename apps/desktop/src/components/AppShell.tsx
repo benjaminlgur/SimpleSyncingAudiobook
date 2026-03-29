@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useConvex } from "convex/react";
 import { Library } from "./Library";
 import { Player } from "./Player";
+import { Settings } from "./Settings";
 import type { AudiobookMeta } from "@audiobook/shared";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -49,6 +50,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
   const convex = useConvex();
   const [library, setLibrary] = useState<LocalAudiobook[]>(loadLibrary);
   const [activeBook, setActiveBook] = useState<LocalAudiobook | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const [deviceId] = useState<string>(getOrCreateDeviceId);
 
   const validateLibraryPaths = useCallback(async (books: LocalAudiobook[]) => {
@@ -187,6 +189,15 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     );
   }
 
+  if (showSettings) {
+    return (
+      <Settings
+        onBack={() => setShowSettings(false)}
+        onDisconnect={onDisconnect}
+      />
+    );
+  }
+
   return (
     <Library
       deviceId={deviceId}
@@ -196,7 +207,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
       onSelectBook={setActiveBook}
       onRemoveBook={removeBook}
       onRelocateBook={relocateBook}
-      onDisconnect={onDisconnect}
+      onOpenSettings={() => setShowSettings(true)}
     />
   );
 }

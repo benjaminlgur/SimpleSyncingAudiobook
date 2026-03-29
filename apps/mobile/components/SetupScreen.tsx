@@ -8,6 +8,7 @@ import {
   Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useColorScheme } from "nativewind";
 
 interface SetupScreenProps {
   onConnect: (url: string) => void;
@@ -16,6 +17,8 @@ interface SetupScreenProps {
 export function SetupScreen({ onConnect }: SetupScreenProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === "dark";
 
   const handleSubmit = () => {
     const trimmed = url.trim();
@@ -34,33 +37,33 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      className="flex-1 bg-white"
+      className="flex-1 bg-white dark:bg-gray-950"
     >
       <View className="flex-1 justify-center px-6">
         <View className="items-center mb-8">
           <Ionicons name="book" size={56} color="#f97316" />
-          <Text className="text-2xl font-bold text-gray-900 mt-4">
+          <Text className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-4">
             Audiobook Player
           </Text>
-          <Text className="text-sm text-gray-500 mt-2 text-center">
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center">
             Connect to your Convex deployment to sync your audiobook progress
             across devices.
           </Text>
         </View>
 
         <View className="mb-4">
-          <Text className="text-sm font-medium text-gray-900 mb-2">
+          <Text className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Convex Deployment URL
           </Text>
           <TextInput
             value={url}
             onChangeText={setUrl}
             placeholder="https://your-project-123.convex.cloud"
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={isDark ? "#6b7280" : "#9ca3af"}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            className="border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900"
+            className="border border-gray-300 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-900"
           />
           {error && (
             <Text className="text-sm text-red-500 mt-2">{error}</Text>
@@ -74,7 +77,7 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
           <Text className="text-white font-medium text-sm">Connect</Text>
         </TouchableOpacity>
 
-        <Text className="text-xs text-gray-400 text-center mt-6">
+        <Text className="text-xs text-gray-400 dark:text-gray-500 text-center mt-6">
           Your Convex URL is stored locally on this device.
         </Text>
       </View>

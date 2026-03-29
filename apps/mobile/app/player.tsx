@@ -20,6 +20,7 @@ import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { useTheme } from "../hooks/useTheme";
 
 const LIBRARY_KEY = "audiobook_library";
 const LAST_PLAYING_BOOK_KEY = "audiobook_last_playing_book_key";
@@ -203,8 +204,8 @@ export default function PlayerScreen() {
 
   if (!book || !initialLoaded) {
     return (
-      <View className="flex-1 bg-white items-center justify-center">
-        <Text className="text-gray-500 text-sm">Loading...</Text>
+      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center">
+        <Text className="text-gray-500 dark:text-gray-400 text-sm">Loading...</Text>
       </View>
     );
   }
@@ -368,6 +369,8 @@ function PlayerInner({
     setScrubPositionMs(null);
   }, []);
 
+  const { isDark } = useTheme();
+
   const syncDotColor =
     syncState.status === "synced"
       ? "#22c55e"
@@ -377,16 +380,19 @@ function PlayerInner({
           ? "#f97316"
           : "#9ca3af";
 
+  const iconColor = isDark ? "#e5e7eb" : "#1f2937";
+  const mutedColor = isDark ? "#9ca3af" : "#6b7280";
+
   return (
-    <View className="flex-1 bg-white">
+    <View className="flex-1 bg-white dark:bg-gray-950">
       {/* Header */}
       <View className="px-4 pt-14 pb-3 flex-row items-center justify-between">
         <TouchableOpacity
           onPress={onBack}
           className="flex-row items-center"
         >
-          <Ionicons name="chevron-back" size={20} color="#6b7280" />
-          <Text className="text-sm text-gray-500 ml-1">Library</Text>
+          <Ionicons name="chevron-back" size={20} color={mutedColor} />
+          <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">Library</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -402,7 +408,7 @@ function PlayerInner({
               marginRight: 6,
             }}
           />
-          <Text className="text-xs text-gray-500">
+          <Text className="text-xs text-gray-500 dark:text-gray-400">
             {syncState.status === "synced"
               ? "Synced"
               : syncState.status === "syncing"
@@ -420,13 +426,11 @@ function PlayerInner({
           <Image
             source={{ uri: coverArtUrl }}
             resizeMode="cover"
-            className="w-64 h-64 rounded-2xl"
-            style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
+            className="w-64 h-64 rounded-2xl border border-gray-200 dark:border-gray-700"
           />
         ) : (
           <View
-            className="w-64 h-64 rounded-2xl bg-orange-50 items-center justify-center"
-            style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
+            className="w-64 h-64 rounded-2xl bg-orange-50 dark:bg-orange-950/30 items-center justify-center border border-gray-200 dark:border-gray-700"
           >
             <Ionicons name="book" size={56} color="#f9731660" />
             <Text
@@ -442,21 +446,18 @@ function PlayerInner({
 
       {/* Error banner */}
       {playerState.error && (
-        <View
-          className="mx-6 mb-2 rounded-lg p-3 flex-row items-center"
-          style={{ backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#fca5a5" }}
-        >
+        <View className="mx-6 mb-2 rounded-lg p-3 flex-row items-center bg-red-50 dark:bg-red-950/30 border border-red-300 dark:border-red-900">
           <Ionicons name="warning" size={18} color="#ef4444" />
           <View className="flex-1 ml-2">
-            <Text className="text-xs font-medium" style={{ color: "#ef4444" }}>
+            <Text className="text-xs font-medium text-red-500">
               Playback Error
             </Text>
-            <Text className="text-xs" style={{ color: "#6b7280" }} numberOfLines={2}>
+            <Text className="text-xs text-gray-500 dark:text-gray-400" numberOfLines={2}>
               {playerState.error}
             </Text>
           </View>
           <TouchableOpacity onPress={onBack}>
-            <Text className="text-xs font-medium" style={{ color: "#6366f1" }}>
+            <Text className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
               Go Back
             </Text>
           </TouchableOpacity>
@@ -465,7 +466,7 @@ function PlayerInner({
 
       {/* Chapter label */}
       <Text
-        className="text-sm font-medium text-gray-900 text-center px-6 mb-2"
+        className="text-sm font-medium text-gray-900 dark:text-gray-100 text-center px-6 mb-2"
         numberOfLines={1}
       >
         {chapterLabel}
@@ -484,7 +485,7 @@ function PlayerInner({
           className="py-3 -my-3"
         >
           <View className="h-5 justify-center">
-            <View className="h-1.5 bg-gray-200 rounded-full">
+            <View className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full">
               <View
                 className="h-1.5 bg-primary rounded-full"
                 style={{ width: `${displayedProgressPercent}%` }}
@@ -500,7 +501,7 @@ function PlayerInner({
                 borderRadius: PROGRESS_THUMB_RADIUS,
                 backgroundColor: "#f97316",
                 borderWidth: 2,
-                borderColor: "#ffffff",
+                borderColor: isDark ? "#030712" : "#ffffff",
                 shadowColor: "#000000",
                 shadowOpacity: 0.18,
                 shadowRadius: 2,
@@ -511,10 +512,10 @@ function PlayerInner({
           </View>
         </View>
         <View className="flex-row justify-between mt-1.5">
-          <Text className="text-xs text-gray-500">
+          <Text className="text-xs text-gray-500 dark:text-gray-400">
             {formatTime(displayedPositionMs)}
           </Text>
-          <Text className="text-xs text-gray-500">
+          <Text className="text-xs text-gray-500 dark:text-gray-400">
             -{formatTime(Math.max(0, playerState.durationMs - displayedPositionMs))}
           </Text>
         </View>
@@ -523,13 +524,13 @@ function PlayerInner({
       {/* Transport Controls */}
       <View className="flex-row items-center justify-center py-4 px-6" style={{ gap: 24 }}>
         <TouchableOpacity onPress={controls.prevChapter} className="p-2">
-          <Ionicons name="play-skip-back" size={24} color="#1f2937" />
+          <Ionicons name="play-skip-back" size={24} color={iconColor} />
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => controls.seekBy(-30000)} className="p-2">
-          <Ionicons name="play-back" size={28} color="#1f2937" />
+          <Ionicons name="play-back" size={28} color={iconColor} />
           <Text
-            className="absolute text-center font-bold"
+            className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
             style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
           >
             30
@@ -550,9 +551,9 @@ function PlayerInner({
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => controls.seekBy(30000)} className="p-2">
-          <Ionicons name="play-forward" size={28} color="#1f2937" />
+          <Ionicons name="play-forward" size={28} color={iconColor} />
           <Text
-            className="absolute text-center font-bold"
+            className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
             style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
           >
             30
@@ -560,33 +561,33 @@ function PlayerInner({
         </TouchableOpacity>
 
         <TouchableOpacity onPress={controls.nextChapter} className="p-2">
-          <Ionicons name="play-skip-forward" size={24} color="#1f2937" />
+          <Ionicons name="play-skip-forward" size={24} color={iconColor} />
         </TouchableOpacity>
       </View>
 
       {/* Bottom controls */}
-      <View className="flex-row items-center justify-around px-6 py-4 border-t border-gray-200">
+      <View className="flex-row items-center justify-around px-6 py-4 border-t border-gray-200 dark:border-gray-800">
         <TouchableOpacity
           onPress={onToggleSpeedMenu}
           className="items-center"
         >
-          <Text className="text-sm font-semibold text-gray-900">
+          <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
             {playerState.playbackSpeed}x
           </Text>
-          <Text className="text-[10px] text-gray-500 mt-0.5">Speed</Text>
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Speed</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           onPress={onToggleChapters}
           className="items-center"
         >
-          <Ionicons name="list" size={20} color="#1f2937" />
-          <Text className="text-[10px] text-gray-500 mt-0.5">Chapters</Text>
+          <Ionicons name="list" size={20} color={iconColor} />
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Chapters</Text>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={onManualSync} className="items-center">
-          <Ionicons name="sync" size={20} color="#1f2937" />
-          <Text className="text-[10px] text-gray-500 mt-0.5">Sync</Text>
+          <Ionicons name="sync" size={20} color={iconColor} />
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Sync</Text>
         </TouchableOpacity>
       </View>
 
@@ -602,8 +603,8 @@ function PlayerInner({
           activeOpacity={1}
           onPress={onToggleSpeedMenu}
         >
-          <View className="bg-white rounded-t-2xl p-4">
-            <Text className="text-sm font-semibold text-gray-900 mb-3">
+          <View className="bg-white dark:bg-gray-900 rounded-t-2xl p-4">
+            <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
               Playback Speed
             </Text>
             {SPEEDS.map((s) => (
@@ -613,15 +614,14 @@ function PlayerInner({
                   controls.setSpeed(s);
                   onToggleSpeedMenu();
                 }}
-                className="py-3 px-4 rounded-lg"
-                style={
+                className={`py-3 px-4 rounded-lg ${
                   playerState.playbackSpeed === s
-                    ? { backgroundColor: "#fff7ed" }
-                    : {}
-                }
+                    ? "bg-orange-50 dark:bg-orange-950/30"
+                    : ""
+                }`}
               >
                 <Text
-                  className={`text-sm ${playerState.playbackSpeed === s ? "text-primary font-medium" : "text-gray-900"}`}
+                  className={`text-sm ${playerState.playbackSpeed === s ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
                 >
                   {s}x
                 </Text>
@@ -643,13 +643,13 @@ function PlayerInner({
           activeOpacity={1}
           onPress={onToggleChapters}
         >
-          <View className="bg-white rounded-t-2xl max-h-[60%]">
-            <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200">
-              <Text className="text-sm font-semibold text-gray-900">
+          <View className="bg-white dark:bg-gray-900 rounded-t-2xl max-h-[60%]">
+            <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+              <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                 Chapters
               </Text>
               <TouchableOpacity onPress={onToggleChapters}>
-                <Ionicons name="close" size={20} color="#6b7280" />
+                <Ionicons name="close" size={20} color={mutedColor} />
               </TouchableOpacity>
             </View>
             <FlatList
@@ -669,14 +669,15 @@ function PlayerInner({
                       controls.skipToChapter(item.index);
                       onToggleChapters();
                     }}
-                    className="px-4 py-3 flex-row items-center"
-                    style={isCurrent ? { backgroundColor: "#fff7ed" } : {}}
+                    className={`px-4 py-3 flex-row items-center ${
+                      isCurrent ? "bg-orange-50 dark:bg-orange-950/30" : ""
+                    }`}
                   >
-                    <Text className="text-xs text-gray-500 w-6 text-right mr-3">
+                    <Text className="text-xs text-gray-500 dark:text-gray-400 w-6 text-right mr-3">
                       {item.index + 1}
                     </Text>
                     <Text
-                      className={`flex-1 text-sm ${isCurrent ? "text-primary font-medium" : "text-gray-900"}`}
+                      className={`flex-1 text-sm ${isCurrent ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
                       numberOfLines={1}
                     >
                       {label}

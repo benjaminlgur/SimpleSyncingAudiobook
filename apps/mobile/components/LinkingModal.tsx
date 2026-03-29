@@ -10,6 +10,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../hooks/useTheme";
 
 interface LinkingModalProps {
   visible: boolean;
@@ -35,6 +36,8 @@ export function LinkingModal({
   const linkMutation = useMutation(api.audiobooks.link);
   const unlinkMutation = useMutation(api.audiobooks.unlink);
 
+  const { isDark } = useTheme();
+
   const availableToLink = (nameMatches || []).filter(
     (b) =>
       b._id !== audiobookId &&
@@ -48,23 +51,23 @@ export function LinkingModal({
         activeOpacity={1}
         onPress={onClose}
       >
-        <View className="bg-white rounded-t-2xl max-h-[70%]">
-          <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200">
-            <Text className="text-sm font-semibold text-gray-900">
+        <View className="bg-white dark:bg-gray-900 rounded-t-2xl max-h-[70%]">
+          <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+            <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
               Link Audiobook
             </Text>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={20} color="#6b7280" />
+              <Ionicons name="close" size={20} color={isDark ? "#9ca3af" : "#6b7280"} />
             </TouchableOpacity>
           </View>
 
-          <View className="flex-row border-b border-gray-200">
+          <View className="flex-row border-b border-gray-200 dark:border-gray-800">
             <TouchableOpacity
               onPress={() => setTab("linked")}
               className="flex-1 py-2.5 items-center"
               style={tab === "linked" ? { borderBottomWidth: 2, borderBottomColor: "#f97316" } : {}}
             >
-              <Text className={`text-xs font-medium ${tab === "linked" ? "text-primary" : "text-gray-500"}`}>
+              <Text className={`text-xs font-medium ${tab === "linked" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}>
                 Linked ({(linkedBooks || []).length})
               </Text>
             </TouchableOpacity>
@@ -73,7 +76,7 @@ export function LinkingModal({
               className="flex-1 py-2.5 items-center"
               style={tab === "available" ? { borderBottomWidth: 2, borderBottomColor: "#f97316" } : {}}
             >
-              <Text className={`text-xs font-medium ${tab === "available" ? "text-primary" : "text-gray-500"}`}>
+              <Text className={`text-xs font-medium ${tab === "available" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}>
                 Available ({availableToLink.length})
               </Text>
             </TouchableOpacity>
@@ -82,7 +85,7 @@ export function LinkingModal({
           {tab === "linked" ? (
             (linkedBooks || []).length === 0 ? (
               <View className="py-8 items-center">
-                <Text className="text-xs text-gray-500">No linked audiobooks.</Text>
+                <Text className="text-xs text-gray-500 dark:text-gray-400">No linked audiobooks.</Text>
               </View>
             ) : (
               <FlatList
@@ -91,8 +94,8 @@ export function LinkingModal({
                 renderItem={({ item }) => (
                   <View className="flex-row items-center justify-between px-4 py-3">
                     <View className="flex-1 mr-3">
-                      <Text className="text-sm text-gray-900">{item.name}</Text>
-                      <Text className="text-xs text-gray-500">
+                      <Text className="text-sm text-gray-900 dark:text-gray-100">{item.name}</Text>
+                      <Text className="text-xs text-gray-500 dark:text-gray-400">
                         {item.chapters.length} chapters · {item.checksum.slice(0, 8)}
                       </Text>
                     </View>
@@ -110,7 +113,7 @@ export function LinkingModal({
             )
           ) : availableToLink.length === 0 ? (
             <View className="py-8 items-center px-4">
-              <Text className="text-xs text-gray-500 text-center">
+              <Text className="text-xs text-gray-500 dark:text-gray-400 text-center">
                 No other audiobooks with the name "{audiobookName}" found.
               </Text>
             </View>
@@ -121,8 +124,8 @@ export function LinkingModal({
               renderItem={({ item }) => (
                 <View className="flex-row items-center justify-between px-4 py-3">
                   <View className="flex-1 mr-3">
-                    <Text className="text-sm text-gray-900">{item.name}</Text>
-                    <Text className="text-xs text-gray-500">
+                    <Text className="text-sm text-gray-900 dark:text-gray-100">{item.name}</Text>
+                    <Text className="text-xs text-gray-500 dark:text-gray-400">
                       {item.chapters.length} chapters · {item.checksum.slice(0, 8)}
                     </Text>
                   </View>

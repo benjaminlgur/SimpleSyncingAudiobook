@@ -22,6 +22,7 @@ import { useConvexContext } from "./_layout";
 import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
+import { useTheme } from "../hooks/useTheme";
 
 const LIBRARY_KEY = "audiobook_library";
 const DEVICE_ID_KEY = "audiobook_device_id";
@@ -81,16 +82,16 @@ function BookThumbnail({ book }: { book: LocalAudiobook }) {
       <Image
         source={{ uri: artUrl }}
         resizeMode="cover"
-        className="w-12 h-12 rounded-lg mr-3"
-        style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
+        className="w-12 h-12 rounded-lg mr-3 border border-gray-200 dark:border-gray-700"
       />
     );
   }
 
   return (
     <View
-      className="w-12 h-12 rounded-lg items-center justify-center mr-3"
-      style={{ backgroundColor: book.missing ? "#fef2f2" : "#fff7ed" }}
+      className={`w-12 h-12 rounded-lg items-center justify-center mr-3 ${
+        book.missing ? "bg-red-50 dark:bg-red-950/30" : "bg-orange-50 dark:bg-orange-950/30"
+      }`}
     >
       <Ionicons
         name={book.missing ? "warning" : "book"}
@@ -143,7 +144,8 @@ export default function LibraryScreen() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const { setConvexUrl, client } = useConvexContext();
+  const { client } = useConvexContext();
+  const { isDark } = useTheme();
   const router = useRouter();
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
   const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
@@ -530,11 +532,6 @@ export default function LibraryScreen() {
     ]);
   };
 
-  const handleDisconnect = () => {
-    setConvexUrl(null);
-    router.replace("/");
-  };
-
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setRefreshToken((prev) => prev + 1);
@@ -543,12 +540,12 @@ export default function LibraryScreen() {
   }, []);
 
   return (
-    <View className="flex-1 bg-white">
+    <View className="flex-1 bg-white dark:bg-gray-950">
       {/* Header */}
-      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200">
-        <Text className="text-xl font-bold text-gray-900">Library</Text>
-        <TouchableOpacity onPress={handleDisconnect}>
-          <Text className="text-xs text-gray-500">Disconnect</Text>
+      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200 dark:border-gray-800">
+        <Text className="text-xl font-bold text-gray-900 dark:text-gray-100">Library</Text>
+        <TouchableOpacity onPress={() => router.push("/settings")}>
+          <Ionicons name="settings-outline" size={22} color={isDark ? "#9ca3af" : "#6b7280"} />
         </TouchableOpacity>
       </View>
 
@@ -560,17 +557,17 @@ export default function LibraryScreen() {
             onRefresh={() => {
               void handleRefresh();
             }}
-            tintColor="#6b7280"
+            tintColor={isDark ? "#9ca3af" : "#6b7280"}
           />
         }
       >
         {library.length === 0 && remoteOnlyCount === 0 ? (
           <View className="items-center justify-center py-20">
-            <Ionicons name="book-outline" size={48} color="#d1d5db" />
-            <Text className="text-sm text-gray-500 mt-4">
+            <Ionicons name="book-outline" size={48} color={isDark ? "#4b5563" : "#d1d5db"} />
+            <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
               No audiobooks yet
             </Text>
-            <Text className="text-xs text-gray-400 mt-1">
+            <Text className="text-xs text-gray-400 dark:text-gray-500 mt-1">
               Add audio files to get started
             </Text>
           </View>
@@ -619,30 +616,33 @@ export default function LibraryScreen() {
                   handleRemove(book);
                 }
               }}
-              className="flex-row items-center p-4 mb-2 rounded-xl border bg-white"
-              style={{ borderColor: book.missing ? "#fca5a5" : "#e5e7eb" }}
+              className="flex-row items-center p-4 mb-2 rounded-xl border bg-white dark:bg-gray-900"
+              style={{ borderColor: book.missing ? "#fca5a5" : (isDark ? "#374151" : "#e5e7eb") }}
             >
               <BookThumbnail book={book} />
               <View className="flex-1">
                 <Text
-                  className="text-sm font-medium"
-                  style={{ color: book.missing ? "#9ca3af" : "#111827" }}
+                  className={`text-sm font-medium ${
+                    book.missing
+                      ? "text-gray-400 dark:text-gray-500"
+                      : "text-gray-900 dark:text-gray-100"
+                  }`}
                   numberOfLines={1}
                 >
                   {book.name}
                 </Text>
                 {book.missing ? (
-                  <Text className="text-xs" style={{ color: "#ef4444" }}>
+                  <Text className="text-xs text-red-500">
                     Files missing — tap to learn more
                   </Text>
                 ) : (
-                  <Text className="text-xs text-gray-500">
+                  <Text className="text-xs text-gray-500 dark:text-gray-400">
                     {book.chapters.length} chapter
                     {book.chapters.length !== 1 ? "s" : ""}
                     {book.convexId ? (
-                      <Text className="text-green-600"> · Synced</Text>
+                      <Text className="text-green-600 dark:text-green-400"> · Synced</Text>
                     ) : (
-                      <Text className="text-yellow-600"> · Local</Text>
+                      <Text className="text-yellow-600 dark:text-yellow-400"> · Local</Text>
                     )}
                   </Text>
                 )}
@@ -650,7 +650,7 @@ export default function LibraryScreen() {
               <Ionicons
                 name={book.missing ? "alert-circle" : "chevron-forward"}
                 size={16}
-                color={book.missing ? "#ef4444" : "#9ca3af"}
+                color={book.missing ? "#ef4444" : (isDark ? "#6b7280" : "#9ca3af")}
               />
             </TouchableOpacity>
           ))
@@ -659,33 +659,28 @@ export default function LibraryScreen() {
         {remoteOnlyBooks && remoteOnlyBooks.length > 0 && (
           <View className="mt-6">
             <View className="flex-row items-center mb-3">
-              <Ionicons name="cloud-outline" size={16} color="#6b7280" />
-              <Text className="text-xs font-semibold text-gray-500 ml-1.5 uppercase tracking-wide">
+              <Ionicons name="cloud-outline" size={16} color={isDark ? "#9ca3af" : "#6b7280"} />
+              <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 ml-1.5 uppercase tracking-wide">
                 On another device ({remoteOnlyBooks.length})
               </Text>
             </View>
             {remoteOnlyBooks.map((book) => (
               <View
                 key={`remote-${book._id}`}
-                className="p-4 mb-2 rounded-xl border"
-                style={{ borderColor: "#e0e7ff", backgroundColor: "#f5f7ff" }}
+                className="p-4 mb-2 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30"
               >
                 <View className="flex-row items-center">
-                  <View
-                    className="w-12 h-12 rounded-lg items-center justify-center mr-3"
-                    style={{ backgroundColor: "#eef2ff" }}
-                  >
+                  <View className="w-12 h-12 rounded-lg items-center justify-center mr-3 bg-indigo-100 dark:bg-indigo-900/50">
                     <Ionicons name="cloud-outline" size={24} color="#818cf8" />
                   </View>
                   <View className="flex-1">
                     <Text
-                      className="text-sm font-medium"
-                      style={{ color: "#6b7280" }}
+                      className="text-sm font-medium text-gray-500 dark:text-gray-400"
                       numberOfLines={1}
                     >
                       {book.name}
                     </Text>
-                    <Text className="text-xs" style={{ color: "#9ca3af" }}>
+                    <Text className="text-xs text-gray-400 dark:text-gray-500">
                       {book.chapters.length} chapter
                       {book.chapters.length !== 1 ? "s" : ""} · Add local files
                       to listen
@@ -700,10 +695,9 @@ export default function LibraryScreen() {
                         `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`,
                       )
                     }
-                    className="px-3 py-1.5 rounded-md border mr-2"
-                    style={{ borderColor: "#c7d2fe" }}
+                    className="px-3 py-1.5 rounded-md border mr-2 border-indigo-300 dark:border-indigo-800"
                   >
-                    <Text className="text-xs" style={{ color: "#6366f1" }}>
+                    <Text className="text-xs text-indigo-500 dark:text-indigo-400">
                       Info
                     </Text>
                   </TouchableOpacity>
@@ -731,10 +725,9 @@ export default function LibraryScreen() {
                         ],
                       )
                     }
-                    className="px-3 py-1.5 rounded-md border"
-                    style={{ borderColor: "#fca5a5" }}
+                    className="px-3 py-1.5 rounded-md border border-red-300 dark:border-red-900"
                   >
-                    <Text className="text-xs" style={{ color: "#dc2626" }}>
+                    <Text className="text-xs text-red-600 dark:text-red-400">
                       Remove
                     </Text>
                   </TouchableOpacity>
@@ -746,7 +739,7 @@ export default function LibraryScreen() {
 
         {remoteOnlyBooks === undefined && library.length === 0 && (
           <View className="items-center py-4">
-            <Text className="text-xs text-gray-400">
+            <Text className="text-xs text-gray-400 dark:text-gray-500">
               Unable to check other devices right now
             </Text>
           </View>
@@ -754,10 +747,10 @@ export default function LibraryScreen() {
       </ScrollView>
 
       {/* Add buttons */}
-      <View className="p-4 border-t border-gray-200">
+      <View className="p-4 border-t border-gray-200 dark:border-gray-800">
         {isScanning ? (
-          <View className="bg-gray-200 rounded-xl py-3.5 items-center">
-            <Text className="text-gray-500 font-medium text-sm">
+          <View className="bg-gray-200 dark:bg-gray-800 rounded-xl py-3.5 items-center">
+            <Text className="text-gray-500 dark:text-gray-400 font-medium text-sm">
               Scanning...
             </Text>
           </View>
@@ -776,7 +769,7 @@ export default function LibraryScreen() {
               onPress={handlePickM4b}
               className="flex-1 rounded-xl py-3.5 items-center flex-row justify-center border border-primary"
             >
-              <Ionicons name="document-outline" size={18} color="#6366f1" />
+              <Ionicons name="document-outline" size={18} color="#f97316" />
               <Text className="text-primary font-medium text-sm ml-1">
                 Add M4B
               </Text>

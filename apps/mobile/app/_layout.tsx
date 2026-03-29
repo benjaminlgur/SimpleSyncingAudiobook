@@ -3,6 +3,8 @@ import { StatusBar } from "expo-status-bar";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { useState, useEffect, createContext, useContext, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useColorScheme } from "nativewind";
+import { ThemeProvider } from "../hooks/useTheme";
 import "../index";
 import "../global.css";
 
@@ -37,6 +39,28 @@ function MaybeConvexProvider({
     return <ConvexProvider client={client}>{children}</ConvexProvider>;
   }
   return <>{children}</>;
+}
+
+function LayoutInner() {
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === "dark";
+
+  return (
+    <>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: isDark ? "#030712" : "#fff" },
+        }}
+      />
+      <StatusBar
+        style={isDark ? "light" : "dark"}
+        hidden={false}
+        translucent={false}
+        backgroundColor={isDark ? "#030712" : "#ffffff"}
+      />
+    </>
+  );
 }
 
 export default function RootLayout() {
@@ -85,18 +109,9 @@ export default function RootLayout() {
       <ConvexContext.Provider
         value={{ convexUrl: loaded ? convexUrl : null, setConvexUrl: handleSetUrl, client }}
       >
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: "#fff" },
-          }}
-        />
-        <StatusBar
-          style="dark"
-          hidden={false}
-          translucent={false}
-          backgroundColor="#ffffff"
-        />
+        <ThemeProvider>
+          <LayoutInner />
+        </ThemeProvider>
       </ConvexContext.Provider>
     </MaybeConvexProvider>
   );

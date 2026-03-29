@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { SetupScreen } from "./components/SetupScreen";
 import { AppShell } from "./components/AppShell";
+import { ThemeProvider } from "./hooks/useTheme";
 
 const CONVEX_URL_KEY = "audiobook_convex_url";
 
@@ -39,12 +40,18 @@ export default function App() {
   };
 
   if (!convexUrl || !client) {
-    return <SetupScreen onConnect={handleSetUrl} />;
+    return (
+      <ThemeProvider>
+        <SetupScreen onConnect={handleSetUrl} />
+      </ThemeProvider>
+    );
   }
 
   return (
-    <ConvexProvider client={client}>
-      <AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} />
-    </ConvexProvider>
+    <ThemeProvider>
+      <ConvexProvider client={client}>
+        <AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} />
+      </ConvexProvider>
+    </ThemeProvider>
   );
 }

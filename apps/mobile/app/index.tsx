@@ -2,10 +2,12 @@ import { Redirect } from "expo-router";
 import { useConvexContext } from "./_layout";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
+import { useColorScheme } from "nativewind";
 import { SetupScreen } from "../components/SetupScreen";
 
 export default function IndexScreen() {
   const { convexUrl, setConvexUrl } = useConvexContext();
+  const { colorScheme } = useColorScheme();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -14,7 +16,7 @@ export default function IndexScreen() {
   }, []);
 
   if (!mounted) {
-    return <View style={{ flex: 1, backgroundColor: "#fff" }} />;
+    return <View style={{ flex: 1, backgroundColor: colorScheme === "dark" ? "#030712" : "#fff" }} />;
   }
 
   if (convexUrl) {
