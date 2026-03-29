@@ -5,7 +5,8 @@ import {
   TouchableOpacity,
   FlatList,
   Modal,
-  Dimensions,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
@@ -19,7 +20,10 @@ import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 const LIBRARY_KEY = "audiobook_library";
+const LAST_PLAYING_BOOK_KEY = "audiobook_last_playing_book_key";
 const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+const PROGRESS_THUMB_SIZE = 16;
+const PROGRESS_THUMB_RADIUS = PROGRESS_THUMB_SIZE / 2;
 
 interface LocalAudiobook extends AudiobookMeta {
   convexId?: string;
@@ -66,6 +70,10 @@ export default function PlayerScreen() {
   // Load book from local storage
   useEffect(() => {
     if (!bookKey) return;
+    AsyncStorage.setItem(LAST_PLAYING_BOOK_KEY, bookKey).catch(() => {
+      // Non-fatal; notification deep-link fallback will use library route.
+    });
+
     AsyncStorage.getItem(LIBRARY_KEY).then((stored) => {
       if (!stored) return;
       try {
@@ -260,6 +268,10 @@ function PlayerInner({
   onManualSync,
   controlsRef,
 }: PlayerInnerProps) {
+  const [progressBarWidth, setProgressBarWidth] = useState(0);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubPositionMs, setScrubPositionMs] = useState<number | null>(null);
+
   const [playerState, controls] = useMobileAudioPlayer({
     fileUris,
     chapters: book.chapters,
@@ -282,10 +294,61 @@ function PlayerInner({
     currentChapter?.filename?.replace(/\.[^/.]+$/, "") ||
     `Chapter ${playerState.currentChapterIndex + 1}`;
 
-  const progressPercent =
+  const displayedPositionMs =
+    isScrubbing && scrubPositionMs !== null ? scrubPositionMs : playerState.positionMs;
+  const displayedProgressPercent =
     playerState.durationMs > 0
-      ? (playerState.positionMs / playerState.durationMs) * 100
+      ? Math.max(0, Math.min(100, (displayedPositionMs / playerState.durationMs) * 100))
       : 0;
+  const progressThumbCenterX =
+    progressBarWidth > 0
+      ? Math.max(
+          PROGRESS_THUMB_RADIUS,
+          Math.min(
+            progressBarWidth - PROGRESS_THUMB_RADIUS,
+            (displayedProgressPercent / 100) * progressBarWidth
+          )
+        )
+      : 0;
+  const progressThumbLeft = Math.max(
+    0,
+    progressThumbCenterX - PROGRESS_THUMB_RADIUS
+  );
+
+  const getSeekMsFromLocationX = useCallback((locationX: number) => {
+    if (playerState.durationMs <= 0 || progressBarWidth <= 0) return 0;
+    const clampedX = Math.max(0, Math.min(locationX, progressBarWidth));
+    return (clampedX / progressBarWidth) * playerState.durationMs;
+  }, [playerState.durationMs, progressBarWidth]);
+
+  const handleProgressBarLayout = useCallback((event: LayoutChangeEvent) => {
+    setProgressBarWidth(event.nativeEvent.layout.width);
+  }, []);
+
+  const handleScrubStart = useCallback((event: GestureResponderEvent) => {
+    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
+    setIsScrubbing(true);
+    setScrubPositionMs(nextPositionMs);
+  }, [getSeekMsFromLocationX]);
+
+  const handleScrubMove = useCallback((event: GestureResponderEvent) => {
+    if (!isScrubbing) return;
+    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
+    setScrubPositionMs(nextPositionMs);
+  }, [getSeekMsFromLocationX, isScrubbing]);
+
+  const handleScrubEnd = useCallback((event: GestureResponderEvent) => {
+    if (!isScrubbing) return;
+    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
+    setIsScrubbing(false);
+    setScrubPositionMs(null);
+    void controls.seekTo(nextPositionMs);
+  }, [controls, getSeekMsFromLocationX, isScrubbing]);
+
+  const handleScrubCancel = useCallback(() => {
+    setIsScrubbing(false);
+    setScrubPositionMs(null);
+  }, []);
 
   const syncDotColor =
     syncState.status === "synced"
@@ -383,28 +446,49 @@ function PlayerInner({
 
       {/* Progress bar */}
       <View className="px-6 mb-1">
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={(e) => {
-            const screenWidth = Dimensions.get("window").width - 48;
-            const x = e.nativeEvent.locationX;
-            const percent = x / screenWidth;
-            controls.seekTo(percent * playerState.durationMs);
-          }}
+        <View
+          onLayout={handleProgressBarLayout}
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderGrant={handleScrubStart}
+          onResponderMove={handleScrubMove}
+          onResponderRelease={handleScrubEnd}
+          onResponderTerminate={handleScrubCancel}
+          className="py-3 -my-3"
         >
-          <View className="h-1.5 bg-gray-200 rounded-full">
+          <View className="h-5 justify-center">
+            <View className="h-1.5 bg-gray-200 rounded-full">
+              <View
+                className="h-1.5 bg-primary rounded-full"
+                style={{ width: `${displayedProgressPercent}%` }}
+              />
+            </View>
             <View
-              className="h-1.5 bg-primary rounded-full"
-              style={{ width: `${progressPercent}%` }}
+              style={{
+                position: "absolute",
+                left: progressThumbLeft,
+                top: 2,
+                width: PROGRESS_THUMB_SIZE,
+                height: PROGRESS_THUMB_SIZE,
+                borderRadius: PROGRESS_THUMB_RADIUS,
+                backgroundColor: "#f97316",
+                borderWidth: 2,
+                borderColor: "#ffffff",
+                shadowColor: "#000000",
+                shadowOpacity: 0.18,
+                shadowRadius: 2,
+                shadowOffset: { width: 0, height: 1 },
+                elevation: 2,
+              }}
             />
           </View>
-        </TouchableOpacity>
+        </View>
         <View className="flex-row justify-between mt-1.5">
           <Text className="text-xs text-gray-500">
-            {formatTime(playerState.positionMs)}
+            {formatTime(displayedPositionMs)}
           </Text>
           <Text className="text-xs text-gray-500">
-            -{formatTime(Math.max(0, playerState.durationMs - playerState.positionMs))}
+            -{formatTime(Math.max(0, playerState.durationMs - displayedPositionMs))}
           </Text>
         </View>
       </View>

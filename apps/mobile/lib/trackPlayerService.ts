@@ -7,12 +7,23 @@ export async function PlaybackService() {
     await TrackPlayer.pause();
     await TrackPlayer.seekTo(0);
   });
-  TrackPlayer.addEventListener(Event.RemoteNext, () =>
-    TrackPlayer.skipToNext()
-  );
-  TrackPlayer.addEventListener(Event.RemotePrevious, () =>
-    TrackPlayer.skipToPrevious()
-  );
+  TrackPlayer.addEventListener(Event.RemoteNext, async () => {
+    try {
+      await TrackPlayer.skipToNext();
+    } catch {
+      // No next track.
+    }
+  });
+  TrackPlayer.addEventListener(Event.RemotePrevious, async () => {
+    try {
+      await TrackPlayer.skipToPrevious();
+    } catch {
+      // No previous track.
+    }
+  });
+  TrackPlayer.addEventListener(Event.RemoteSeek, async (event) => {
+    await TrackPlayer.seekTo(event.position);
+  });
   TrackPlayer.addEventListener(Event.RemoteJumpForward, async (event) => {
     const position = await TrackPlayer.getPosition();
     await TrackPlayer.seekTo(position + event.interval);

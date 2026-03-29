@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Platform } from "react-native";
 import TrackPlayer, {
   State,
   Event,
@@ -35,39 +34,34 @@ export interface MobilePlayerControls {
 
 let isSetup = false;
 
+const FULL_NOTIFICATION_CAPABILITIES = [
+  Capability.Play,
+  Capability.Pause,
+  Capability.SkipToNext,
+  Capability.SkipToPrevious,
+  Capability.JumpForward,
+  Capability.JumpBackward,
+  Capability.SeekTo,
+];
+
 async function setupPlayer() {
   if (isSetup) return;
   try {
     await TrackPlayer.setupPlayer();
-    // RNTP v3 notification internals crash on newer Android versions due
-    // dynamic receiver export flags. Skip updateOptions there for stability.
-    const isNotificationOptionsSafe =
-      Platform.OS !== "android" || Number(Platform.Version) < 34;
-
-    if (isNotificationOptionsSafe) {
-      await TrackPlayer.updateOptions({
-        android: {
-          appKilledPlaybackBehavior:
-            AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
-        },
-        capabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.SkipToNext,
-          Capability.SkipToPrevious,
-          Capability.JumpForward,
-          Capability.JumpBackward,
-          Capability.SeekTo,
-        ],
-        compactCapabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.SkipToNext,
-        ],
-        forwardJumpInterval: 30,
-        backwardJumpInterval: 30,
-      });
-    }
+    await TrackPlayer.updateOptions({
+      android: {
+        appKilledPlaybackBehavior:
+          AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+      },
+      capabilities: FULL_NOTIFICATION_CAPABILITIES,
+      compactCapabilities: [
+        Capability.Play,
+        Capability.Pause,
+        Capability.SkipToNext,
+      ],
+      forwardJumpInterval: 30,
+      backwardJumpInterval: 30,
+    });
     isSetup = true;
   } catch {
     isSetup = true;
@@ -222,9 +216,15 @@ export function useMobileAudioPlayer(
     ? virtualChapterIdx
     : currentTrackIndex;
 
+  const playbackStatus: State | undefined =
+    typeof playbackState === "object" &&
+    playbackState !== null &&
+    "state" in playbackState
+      ? (playbackState as { state: State | undefined }).state
+      : (playbackState as State);
   const isPlaying =
-    playbackState === State.Playing ||
-    playbackState === State.Buffering;
+    playbackStatus === State.Playing ||
+    playbackStatus === State.Buffering;
 
   let positionMs: number;
   let durationMs: number;
@@ -246,7 +246,10 @@ export function useMobileAudioPlayer(
     positionMs,
     durationMs,
     playbackSpeed: speed,
-    isLoading: !ready || playbackState === State.Buffering || playbackState === State.Connecting,
+    isLoading:
+      !ready ||
+      playbackStatus === State.Buffering ||
+      playbackStatus === State.Connecting,
     error: loadError || playbackError,
   };
 
