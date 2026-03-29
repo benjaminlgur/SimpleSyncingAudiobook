@@ -33,4 +33,14 @@ export default defineSchema({
   })
     .index("by_linked", ["linkedId"])
     .index("by_canonical", ["canonicalId"]),
+
+  audiobookDeviceCopies: defineTable({
+    audiobookId: v.id("audiobooks"),
+    deviceId: v.string(),
+    platform: v.union(v.literal("mobile"), v.literal("desktop")),
+    updatedAt: v.number(),
+  })
+    .index("by_audiobook", ["audiobookId"])
+    .index("by_device", ["deviceId"])
+    .index("by_audiobook_device", ["audiobookId", "deviceId"]),
 });

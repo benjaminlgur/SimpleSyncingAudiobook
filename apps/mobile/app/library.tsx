@@ -6,10 +6,12 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  RefreshControl,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
@@ -20,6 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
 
 const LIBRARY_KEY = "audiobook_library";
+const DEVICE_ID_KEY = "audiobook_device_id";
 const AUDIO_EXTENSIONS = [
   ".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav", ".aac",
 ];
@@ -73,10 +76,37 @@ function getFolderNameFromUri(uri: string): string | null {
 export default function LibraryScreen() {
   const [library, setLibrary] = useState<LocalAudiobook[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
-  const { setConvexUrl } = useConvexContext();
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const { setConvexUrl, client } = useConvexContext();
   const router = useRouter();
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
+  const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
+  const removeFromDevice = useMutation(api.audiobooks.removeFromDevice);
+  const removeFromDatabase = useMutation(api.audiobooks.remove);
+  const remoteOnlyBooks = useQuery(
+    api.audiobooks.listRemoteForDevice,
+    deviceId ? { deviceId, refreshToken } : "skip"
+  );
+  const remoteOnlyCount = remoteOnlyBooks?.length ?? 0;
+
+  useEffect(() => {
+    (async () => {
+      const existing = await AsyncStorage.getItem(DEVICE_ID_KEY);
+      if (existing) {
+        setDeviceId(existing);
+        return;
+      }
+
+      const next = `mobile_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+      await AsyncStorage.setItem(DEVICE_ID_KEY, next);
+      setDeviceId(next);
+    })();
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -106,6 +136,96 @@ export default function LibraryScreen() {
     setLibrary(books);
     await AsyncStorage.setItem(LIBRARY_KEY, JSON.stringify(books));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const pruneBooksMissingInDatabase = async () => {
+      if (!client || library.length === 0) return;
+
+      const booksWithConvexId = library.filter((book) => !!book.convexId);
+      if (booksWithConvexId.length === 0) return;
+
+      const missingKeys = new Set<string>();
+
+      await Promise.all(
+        booksWithConvexId.map(async (book) => {
+          try {
+            const doc = await client.query(api.audiobooks.get, {
+              id: book.convexId as Id<"audiobooks">,
+            });
+            if (!doc) {
+              missingKeys.add(`${book.name}::${book.checksum}`);
+            }
+          } catch {
+            // Keep local library as-is while offline or if request fails.
+          }
+        })
+      );
+
+      if (missingKeys.size === 0 || cancelled) return;
+
+      const updated = library.filter(
+        (book) => !missingKeys.has(`${book.name}::${book.checksum}`)
+      );
+      await saveLibrary(updated);
+    };
+
+    void pruneBooksMissingInDatabase();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, library, saveLibrary]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const registerLocalBooks = async () => {
+      if (!deviceId || library.length === 0) return;
+
+      const updated = [...library];
+      let changed = false;
+
+      for (let i = 0; i < updated.length; i += 1) {
+        const book = updated[i];
+        let audiobookId = book.convexId;
+
+        if (!audiobookId) {
+          try {
+            const result = await getOrCreate({
+              name: book.name,
+              checksum: book.checksum,
+              chapters: book.chapters,
+            });
+            audiobookId = result.audiobookId;
+            updated[i] = { ...book, convexId: audiobookId };
+            changed = true;
+          } catch {
+            continue;
+          }
+        }
+
+        try {
+          await registerOnDevice({
+            audiobookId: audiobookId as Id<"audiobooks">,
+            deviceId,
+            platform: "mobile",
+          });
+        } catch {
+          // Best effort while offline.
+        }
+      }
+
+      if (changed && !cancelled) {
+        await saveLibrary(updated);
+      }
+    };
+
+    void registerLocalBooks();
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, getOrCreate, library, registerOnDevice, saveLibrary]);
 
   const handlePickFolder = async () => {
     setIsScanning(true);
@@ -214,6 +334,13 @@ export default function LibraryScreen() {
           chapters: meta.chapters,
         });
         convexId = res.audiobookId;
+        if (deviceId) {
+          await registerOnDevice({
+            audiobookId: res.audiobookId,
+            deviceId,
+            platform: "mobile",
+          });
+        }
       } catch {
         // Offline
       }
@@ -283,6 +410,13 @@ export default function LibraryScreen() {
           chapters: meta.chapters,
         });
         convexId = res.audiobookId;
+        if (deviceId) {
+          await registerOnDevice({
+            audiobookId: res.audiobookId,
+            deviceId,
+            platform: "mobile",
+          });
+        }
       } catch {
         // Offline
       }
@@ -302,11 +436,22 @@ export default function LibraryScreen() {
       {
         text: "Remove",
         style: "destructive",
-        onPress: () => {
+        onPress: async () => {
+          if (deviceId && book.convexId) {
+            try {
+              await removeFromDevice({
+                audiobookId: book.convexId as Id<"audiobooks">,
+                deviceId,
+              });
+            } catch {
+              // Keep local remove responsive if network is unavailable.
+            }
+          }
+
           const updated = library.filter(
             (b) => !(b.name === book.name && b.checksum === book.checksum)
           );
-          saveLibrary(updated);
+          await saveLibrary(updated);
         },
       },
     ]);
@@ -316,6 +461,13 @@ export default function LibraryScreen() {
     setConvexUrl(null);
     router.replace("/");
   };
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    setRefreshToken((prev) => prev + 1);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    setIsRefreshing(false);
+  }, []);
 
   return (
     <View className="flex-1 bg-white">
@@ -327,8 +479,19 @@ export default function LibraryScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView className="flex-1 px-4 py-4">
-        {library.length === 0 ? (
+      <ScrollView
+        className="flex-1 px-4 py-4"
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => {
+              void handleRefresh();
+            }}
+            tintColor="#6b7280"
+          />
+        }
+      >
+        {library.length === 0 && remoteOnlyCount === 0 ? (
           <View className="items-center justify-center py-20">
             <Ionicons name="book-outline" size={48} color="#d1d5db" />
             <Text className="text-sm text-gray-500 mt-4">
@@ -416,6 +579,101 @@ export default function LibraryScreen() {
               />
             </TouchableOpacity>
           ))
+        )}
+
+        {remoteOnlyBooks && remoteOnlyBooks.length > 0 && (
+          <View className="mt-6">
+            <View className="flex-row items-center mb-3">
+              <Ionicons name="cloud-outline" size={16} color="#6b7280" />
+              <Text className="text-xs font-semibold text-gray-500 ml-1.5 uppercase tracking-wide">
+                On another device ({remoteOnlyBooks.length})
+              </Text>
+            </View>
+            {remoteOnlyBooks.map((book) => (
+              <View
+                key={`remote-${book._id}`}
+                className="p-4 mb-2 rounded-xl border"
+                style={{ borderColor: "#e0e7ff", backgroundColor: "#f5f7ff" }}
+              >
+                <View className="flex-row items-center">
+                <View
+                  className="w-12 h-12 rounded-lg items-center justify-center mr-3"
+                  style={{ backgroundColor: "#eef2ff" }}
+                >
+                  <Ionicons name="cloud-outline" size={24} color="#818cf8" />
+                </View>
+                <View className="flex-1">
+                  <Text
+                    className="text-sm font-medium"
+                    style={{ color: "#6b7280" }}
+                    numberOfLines={1}
+                  >
+                    {book.name}
+                  </Text>
+                  <Text className="text-xs" style={{ color: "#9ca3af" }}>
+                    {book.chapters.length} chapter
+                    {book.chapters.length !== 1 ? "s" : ""} · Add local files to listen
+                  </Text>
+                </View>
+                </View>
+                <View className="flex-row mt-3" style={{ marginLeft: 60 }}>
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert(
+                        "Not on this device",
+                        `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-md border mr-2"
+                    style={{ borderColor: "#c7d2fe" }}
+                  >
+                    <Text className="text-xs" style={{ color: "#6366f1" }}>
+                      Info
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert(
+                        "Remove from database",
+                        `Remove \"${book.name}\" from the shared database for all devices?`,
+                        [
+                          { text: "Cancel", style: "cancel" },
+                          {
+                            text: "Remove",
+                            style: "destructive",
+                            onPress: async () => {
+                              try {
+                                await removeFromDatabase({ id: book._id });
+                              } catch {
+                                Alert.alert(
+                                  "Unable to remove",
+                                  "Couldn't remove this audiobook from the database right now."
+                                );
+                              }
+                            },
+                          },
+                        ]
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-md border"
+                    style={{ borderColor: "#fca5a5" }}
+                  >
+                    <Text className="text-xs" style={{ color: "#dc2626" }}>
+                      Remove
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {remoteOnlyBooks === undefined && library.length === 0 && (
+          <View className="items-center py-4">
+            <Text className="text-xs text-gray-400">
+              Unable to check other devices right now
+            </Text>
+          </View>
         )}
       </ScrollView>
 
