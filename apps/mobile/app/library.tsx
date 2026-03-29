@@ -7,6 +7,7 @@ import {
   Alert,
   Platform,
   RefreshControl,
+  Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
@@ -20,6 +21,7 @@ import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { useConvexContext } from "./_layout";
 import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
+import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 
 const LIBRARY_KEY = "audiobook_library";
 const DEVICE_ID_KEY = "audiobook_device_id";
@@ -36,6 +38,60 @@ interface PickedAudioFile {
   uri: string;
   name: string;
   size: number;
+}
+
+function BookThumbnail({ book }: { book: LocalAudiobook }) {
+  const [artUrl, setArtUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (book.missing) {
+      setArtUrl(null);
+      return;
+    }
+
+    const uris = book.folderPath.split("|").filter(Boolean);
+    if (uris.length === 0) {
+      setArtUrl(null);
+      return;
+    }
+
+    (async () => {
+      const art = await extractCoverArtFromAudioUris(uris);
+      if (!cancelled) {
+        setArtUrl(art);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [book.folderPath, book.missing]);
+
+  if (artUrl) {
+    return (
+      <Image
+        source={{ uri: artUrl }}
+        resizeMode="cover"
+        className="w-12 h-12 rounded-lg mr-3"
+        style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
+      />
+    );
+  }
+
+  return (
+    <View
+      className="w-12 h-12 rounded-lg items-center justify-center mr-3"
+      style={{ backgroundColor: book.missing ? "#fef2f2" : "#fff7ed" }}
+    >
+      <Ionicons
+        name={book.missing ? "warning" : "book"}
+        size={24}
+        color={book.missing ? "#ef4444" : "#f97316"}
+      />
+    </View>
+  );
 }
 
 function isAudioFile(name: string): boolean {
@@ -538,16 +594,7 @@ export default function LibraryScreen() {
               className="flex-row items-center p-4 mb-2 rounded-xl border bg-white"
               style={{ borderColor: book.missing ? "#fca5a5" : "#e5e7eb" }}
             >
-              <View
-                className="w-12 h-12 rounded-lg items-center justify-center mr-3"
-                style={{ backgroundColor: book.missing ? "#fef2f2" : "#fff7ed" }}
-              >
-                <Ionicons
-                  name={book.missing ? "warning" : "book"}
-                  size={24}
-                  color={book.missing ? "#ef4444" : "#f97316"}
-                />
-              </View>
+              <BookThumbnail book={book} />
               <View className="flex-1">
                 <Text
                   className="text-sm font-medium"
