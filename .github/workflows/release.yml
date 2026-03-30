@@ -71,15 +71,17 @@ jobs:
         run: pnpm install
 
       - name: Build desktop app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ github.ref_name }}
           releaseName: "Simple Syncing Audiobook ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
+          retryAttempts: 3
           args: ${{ matrix.args }}
 
   build-android:
