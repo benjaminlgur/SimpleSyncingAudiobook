@@ -6,6 +6,7 @@ import {
   FlatList,
   Modal,
   Image,
+  ActivityIndicator,
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
@@ -15,7 +16,12 @@ import { api } from "../../../convex/_generated/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import { SyncEngine } from "@audiobook/shared";
-import type { SyncState, SyncPushResult, AudiobookMeta, ChapterInfo } from "@audiobook/shared";
+import type {
+  SyncState,
+  SyncPushResult,
+  AudiobookMeta,
+  ChapterInfo,
+} from "@audiobook/shared";
 import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { Ionicons } from "@expo/vector-icons";
@@ -27,6 +33,7 @@ const LAST_PLAYING_BOOK_KEY = "audiobook_last_playing_book_key";
 const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 const PROGRESS_THUMB_SIZE = 16;
 const PROGRESS_THUMB_RADIUS = PROGRESS_THUMB_SIZE / 2;
+const REMOTE_POSITION_PROMPT_DELAY_MS = 12_000;
 
 interface LocalAudiobook extends AudiobookMeta {
   convexId?: string;
@@ -64,11 +71,63 @@ export default function PlayerScreen() {
   const [initialChapter, setInitialChapter] = useState(0);
   const [initialPosition, setInitialPosition] = useState(0);
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [localInitResolved, setLocalInitResolved] = useState(false);
+  const [showOfflinePrompt, setShowOfflinePrompt] = useState(false);
+  const [networkStatus, setNetworkStatus] = useState<
+    "unknown" | "online" | "offline"
+  >("unknown");
 
   const syncEngineRef = useRef<SyncEngine | null>(null);
-  const controlsRef = useRef<{ skipToChapter: (index: number, seekMs?: number) => Promise<void> } | null>(null);
+  const controlsRef = useRef<{
+    skipToChapter: (index: number, seekMs?: number) => Promise<void>;
+  } | null>(null);
+  const initialLoadedRef = useRef(false);
+  const usedFallbackStartupRef = useRef(false);
+  const playbackProgressedRef = useRef(false);
+  const lateRemoteAppliedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
+
+  useEffect(() => {
+    initialLoadedRef.current = initialLoaded;
+  }, [initialLoaded]);
+
+  useEffect(() => {
+    let active = true;
+
+    const applyNetworkState = ({
+      isConnected,
+      isInternetReachable,
+    }: {
+      isConnected: boolean | null;
+      isInternetReachable: boolean | null;
+    }) => {
+      if (isConnected === false || isInternetReachable === false) {
+        setNetworkStatus("offline");
+      } else if (isConnected === true && isInternetReachable === true) {
+        setNetworkStatus("online");
+      } else if (isConnected === true) {
+        setNetworkStatus("unknown");
+      }
+    };
+
+    NetInfo.fetch().then((state) => {
+      if (!active) return;
+      applyNetworkState(state);
+    });
+
+    const unsubNet = NetInfo.addEventListener((state) => {
+      if (state.isConnected && state.isInternetReachable) {
+        syncEngineRef.current?.onReconnect();
+      }
+      applyNetworkState(state);
+    });
+
+    return () => {
+      active = false;
+      unsubNet();
+    };
+  }, []);
 
   // Load book from local storage
   useEffect(() => {
@@ -83,7 +142,7 @@ export default function PlayerScreen() {
         const library: LocalAudiobook[] = JSON.parse(stored);
         const [name, checksum] = bookKey.split("::");
         const found = library.find(
-          (b) => b.name === name && b.checksum === checksum
+          (b) => b.name === name && b.checksum === checksum,
         );
         if (found) setBook(found);
       } catch {
@@ -92,11 +151,31 @@ export default function PlayerScreen() {
     });
   }, [bookKey]);
 
+  useEffect(() => {
+    setInitialChapter(0);
+    setInitialPosition(0);
+    setInitialLoaded(false);
+    setLocalInitResolved(false);
+    setShowOfflinePrompt(false);
+    initialLoadedRef.current = false;
+    usedFallbackStartupRef.current = false;
+    playbackProgressedRef.current = false;
+    lateRemoteAppliedRef.current = false;
+  }, [bookKey]);
+
   const convexId = book?.convexId;
+  const syncStorageKey = book
+    ? convexId || `local_${book.name}_${book.checksum}`
+    : null;
   const remotePosition = useQuery(
     api.positions.get,
-    convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip"
+    convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
   );
+
+  useEffect(() => {
+    if (!syncStorageKey) return;
+    setLocalInitResolved(false);
+  }, [syncStorageKey]);
 
   // Resolve Convex ID
   useEffect(() => {
@@ -108,31 +187,98 @@ export default function PlayerScreen() {
           checksum: book.checksum,
           chapters: book.chapters,
         });
-        setBook((prev) => (prev ? { ...prev, convexId: result.audiobookId } : prev));
+        setBook((prev) =>
+          prev ? { ...prev, convexId: result.audiobookId } : prev,
+        );
       } catch {
         // Offline
       }
     })();
   }, [book, convexId, getOrCreate]);
 
-  // Load initial position
+  // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
     if (initialLoaded || !book) return;
-    if (remotePosition !== undefined) {
-      if (remotePosition) {
-        setInitialChapter(remotePosition.chapterIndex);
-        setInitialPosition(remotePosition.positionMs);
+    if (remotePosition === undefined) return;
+
+    if (remotePosition) {
+      setInitialChapter(remotePosition.chapterIndex);
+      setInitialPosition(remotePosition.positionMs);
+    }
+    usedFallbackStartupRef.current = false;
+    setShowOfflinePrompt(false);
+    setInitialLoaded(true);
+  }, [remotePosition, initialLoaded, book]);
+
+  // If local state is ready first, only show the warning immediately when
+  // we know the device is offline. Otherwise keep waiting for the remote sync.
+  useEffect(() => {
+    if (initialLoaded || !book || !localInitResolved) return;
+    if (remotePosition !== undefined) return;
+
+    if (convexId) {
+      if (networkStatus === "offline") {
+        setShowOfflinePrompt(true);
       }
-      setInitialLoaded(true);
-    } else if (!convexId) {
+    } else {
       setInitialLoaded(true);
     }
-  }, [remotePosition, convexId, initialLoaded, book]);
+  }, [
+    convexId,
+    initialLoaded,
+    localInitResolved,
+    networkStatus,
+    remotePosition,
+    book,
+  ]);
+
+  // If remote sync stays unresolved for a while even while online, then
+  // let the user decide whether to continue from local state.
+  useEffect(() => {
+    if (initialLoaded || showOfflinePrompt || !book) return;
+    if (!convexId || remotePosition !== undefined || !localInitResolved) return;
+
+    const timeoutId = setTimeout(() => {
+      if (initialLoadedRef.current) return;
+      setShowOfflinePrompt(true);
+    }, REMOTE_POSITION_PROMPT_DELAY_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    book,
+    convexId,
+    initialLoaded,
+    localInitResolved,
+    remotePosition,
+    showOfflinePrompt,
+  ]);
+
+  const handleContinueOffline = useCallback(() => {
+    usedFallbackStartupRef.current = true;
+    setShowOfflinePrompt(false);
+    setInitialLoaded(true);
+  }, []);
+
+  // If we started from fallback state, adopt remote position once
+  // if playback has not progressed yet.
+  useEffect(() => {
+    if (!book || !initialLoaded || !remotePosition) return;
+    if (!usedFallbackStartupRef.current) return;
+    if (lateRemoteAppliedRef.current || playbackProgressedRef.current) return;
+
+    lateRemoteAppliedRef.current = true;
+    setInitialChapter(remotePosition.chapterIndex);
+    setInitialPosition(remotePosition.positionMs);
+    void controlsRef.current?.skipToChapter(
+      remotePosition.chapterIndex,
+      remotePosition.positionMs,
+    );
+  }, [book, initialLoaded, remotePosition]);
 
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
-    if (!book) return;
-    const storageKey = convexId || `local_${book.name}_${book.checksum}`;
+    if (!book || !syncStorageKey) return;
+    let cancelled = false;
 
     const pushFn = async (position: {
       audiobookId: string;
@@ -153,44 +299,60 @@ export default function PlayerScreen() {
       };
     };
 
-    const onRemoteNewer = (remote: { chapterIndex: number; positionMs: number }) => {
-      controlsRef.current?.skipToChapter(remote.chapterIndex, remote.positionMs);
+    const onRemoteNewer = (remote: {
+      chapterIndex: number;
+      positionMs: number;
+    }) => {
+      controlsRef.current?.skipToChapter(
+        remote.chapterIndex,
+        remote.positionMs,
+      );
     };
 
-    const engine = new SyncEngine(storageKey, asyncStorageAdapter, pushFn, onRemoteNewer);
+    const engine = new SyncEngine(
+      syncStorageKey,
+      asyncStorageAdapter,
+      pushFn,
+      onRemoteNewer,
+    );
     syncEngineRef.current = engine;
     const unsub = engine.subscribe(setSyncState);
 
     (async () => {
-      const localPos = await engine.initialize();
-      if (localPos && !initialLoaded) {
-        setInitialChapter(localPos.chapterIndex);
-        setInitialPosition(localPos.positionMs);
+      try {
+        const localPos = await engine.initialize();
+        if (cancelled) return;
+        if (localPos && !initialLoadedRef.current) {
+          setInitialChapter(localPos.chapterIndex);
+          setInitialPosition(localPos.positionMs);
+        }
+      } finally {
+        if (!cancelled) {
+          setLocalInitResolved(true);
+        }
       }
     })();
 
-    const unsubNet = NetInfo.addEventListener((state) => {
-      if (state.isConnected && state.isInternetReachable) {
-        engine.onReconnect();
-      }
-    });
-
     return () => {
+      cancelled = true;
       unsub();
-      unsubNet();
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition, book, initialLoaded]);
+  }, [convexId, updatePosition, book, syncStorageKey]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
+      if (chapterIndex > 0 || positionMs > 0) {
+        playbackProgressedRef.current = true;
+      }
       syncEngineRef.current?.updatePosition(chapterIndex, positionMs);
     },
-    []
+    [],
   );
 
   const handleChapterChange = useCallback(() => {
+    playbackProgressedRef.current = true;
     syncEngineRef.current?.onChapterChange();
   }, []);
 
@@ -199,13 +361,46 @@ export default function PlayerScreen() {
   }, []);
 
   const handlePlay = useCallback(() => {
+    playbackProgressedRef.current = true;
     syncEngineRef.current?.onPlay();
   }, []);
 
   if (!book || !initialLoaded) {
+    if (showOfflinePrompt && book) {
+      return (
+        <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center px-8">
+          <Ionicons name="cloud-offline-outline" size={48} color="#f97316" />
+          <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4 text-center">
+            Unable to Sync
+          </Text>
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center leading-5">
+            The latest position for "{book.name}" couldn't be loaded from the
+            server. Continuing with your local position may cause sync conflicts
+            if you've listened on another device.
+          </Text>
+          <TouchableOpacity
+            onPress={handleContinueOffline}
+            className="mt-6 bg-primary rounded-xl px-6 py-3"
+          >
+            <Text className="text-white font-medium text-sm">
+              Continue with Local Position
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.back()} className="mt-3 py-2">
+            <Text className="text-sm text-gray-500 dark:text-gray-400">
+              Go Back
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center">
-        <Text className="text-gray-500 dark:text-gray-400 text-sm">Loading...</Text>
+        <ActivityIndicator size="small" color="#f97316" />
+        <Text className="text-gray-500 dark:text-gray-400 text-sm mt-3">
+          Loading...
+        </Text>
       </View>
     );
   }
@@ -250,7 +445,9 @@ interface PlayerInnerProps {
   onPause: () => void;
   onPlay: () => void;
   onManualSync: () => void;
-  controlsRef: React.MutableRefObject<{ skipToChapter: (index: number, seekMs?: number) => Promise<void> } | null>;
+  controlsRef: React.MutableRefObject<{
+    skipToChapter: (index: number, seekMs?: number) => Promise<void>;
+  } | null>;
 }
 
 function PlayerInner({
@@ -289,7 +486,9 @@ function PlayerInner({
 
   useEffect(() => {
     controlsRef.current = controls;
-    return () => { controlsRef.current = null; };
+    return () => {
+      controlsRef.current = null;
+    };
   }, [controls, controlsRef]);
 
   useEffect(() => {
@@ -314,10 +513,15 @@ function PlayerInner({
     `Chapter ${playerState.currentChapterIndex + 1}`;
 
   const displayedPositionMs =
-    isScrubbing && scrubPositionMs !== null ? scrubPositionMs : playerState.positionMs;
+    isScrubbing && scrubPositionMs !== null
+      ? scrubPositionMs
+      : playerState.positionMs;
   const displayedProgressPercent =
     playerState.durationMs > 0
-      ? Math.max(0, Math.min(100, (displayedPositionMs / playerState.durationMs) * 100))
+      ? Math.max(
+          0,
+          Math.min(100, (displayedPositionMs / playerState.durationMs) * 100),
+        )
       : 0;
   const progressThumbCenterX =
     progressBarWidth > 0
@@ -325,44 +529,62 @@ function PlayerInner({
           PROGRESS_THUMB_RADIUS,
           Math.min(
             progressBarWidth - PROGRESS_THUMB_RADIUS,
-            (displayedProgressPercent / 100) * progressBarWidth
-          )
+            (displayedProgressPercent / 100) * progressBarWidth,
+          ),
         )
       : 0;
   const progressThumbLeft = Math.max(
     0,
-    progressThumbCenterX - PROGRESS_THUMB_RADIUS
+    progressThumbCenterX - PROGRESS_THUMB_RADIUS,
   );
 
-  const getSeekMsFromLocationX = useCallback((locationX: number) => {
-    if (playerState.durationMs <= 0 || progressBarWidth <= 0) return 0;
-    const clampedX = Math.max(0, Math.min(locationX, progressBarWidth));
-    return (clampedX / progressBarWidth) * playerState.durationMs;
-  }, [playerState.durationMs, progressBarWidth]);
+  const getSeekMsFromLocationX = useCallback(
+    (locationX: number) => {
+      if (playerState.durationMs <= 0 || progressBarWidth <= 0) return 0;
+      const clampedX = Math.max(0, Math.min(locationX, progressBarWidth));
+      return (clampedX / progressBarWidth) * playerState.durationMs;
+    },
+    [playerState.durationMs, progressBarWidth],
+  );
 
   const handleProgressBarLayout = useCallback((event: LayoutChangeEvent) => {
     setProgressBarWidth(event.nativeEvent.layout.width);
   }, []);
 
-  const handleScrubStart = useCallback((event: GestureResponderEvent) => {
-    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
-    setIsScrubbing(true);
-    setScrubPositionMs(nextPositionMs);
-  }, [getSeekMsFromLocationX]);
+  const handleScrubStart = useCallback(
+    (event: GestureResponderEvent) => {
+      const nextPositionMs = getSeekMsFromLocationX(
+        event.nativeEvent.locationX,
+      );
+      setIsScrubbing(true);
+      setScrubPositionMs(nextPositionMs);
+    },
+    [getSeekMsFromLocationX],
+  );
 
-  const handleScrubMove = useCallback((event: GestureResponderEvent) => {
-    if (!isScrubbing) return;
-    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
-    setScrubPositionMs(nextPositionMs);
-  }, [getSeekMsFromLocationX, isScrubbing]);
+  const handleScrubMove = useCallback(
+    (event: GestureResponderEvent) => {
+      if (!isScrubbing) return;
+      const nextPositionMs = getSeekMsFromLocationX(
+        event.nativeEvent.locationX,
+      );
+      setScrubPositionMs(nextPositionMs);
+    },
+    [getSeekMsFromLocationX, isScrubbing],
+  );
 
-  const handleScrubEnd = useCallback((event: GestureResponderEvent) => {
-    if (!isScrubbing) return;
-    const nextPositionMs = getSeekMsFromLocationX(event.nativeEvent.locationX);
-    setIsScrubbing(false);
-    setScrubPositionMs(null);
-    void controls.seekTo(nextPositionMs);
-  }, [controls, getSeekMsFromLocationX, isScrubbing]);
+  const handleScrubEnd = useCallback(
+    (event: GestureResponderEvent) => {
+      if (!isScrubbing) return;
+      const nextPositionMs = getSeekMsFromLocationX(
+        event.nativeEvent.locationX,
+      );
+      setIsScrubbing(false);
+      setScrubPositionMs(null);
+      void controls.seekTo(nextPositionMs);
+    },
+    [controls, getSeekMsFromLocationX, isScrubbing],
+  );
 
   const handleScrubCancel = useCallback(() => {
     setIsScrubbing(false);
@@ -387,12 +609,11 @@ function PlayerInner({
     <View className="flex-1 bg-white dark:bg-gray-950">
       {/* Header */}
       <View className="px-4 pt-2 pb-3 flex-row items-center justify-between">
-        <TouchableOpacity
-          onPress={onBack}
-          className="flex-row items-center"
-        >
+        <TouchableOpacity onPress={onBack} className="flex-row items-center">
           <Ionicons name="chevron-back" size={20} color={mutedColor} />
-          <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">Library</Text>
+          <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">
+            Library
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -429,9 +650,7 @@ function PlayerInner({
             className="w-64 h-64 rounded-2xl border border-gray-200 dark:border-gray-700"
           />
         ) : (
-          <View
-            className="w-64 h-64 rounded-2xl bg-orange-50 dark:bg-orange-950/30 items-center justify-center border border-gray-200 dark:border-gray-700"
-          >
+          <View className="w-64 h-64 rounded-2xl bg-orange-50 dark:bg-orange-950/30 items-center justify-center border border-gray-200 dark:border-gray-700">
             <Ionicons name="book" size={56} color="#f9731660" />
             <Text
               className="text-sm font-medium mt-2 px-4 text-center"
@@ -452,7 +671,10 @@ function PlayerInner({
             <Text className="text-xs font-medium text-red-500">
               Playback Error
             </Text>
-            <Text className="text-xs text-gray-500 dark:text-gray-400" numberOfLines={2}>
+            <Text
+              className="text-xs text-gray-500 dark:text-gray-400"
+              numberOfLines={2}
+            >
               {playerState.error}
             </Text>
           </View>
@@ -516,18 +738,27 @@ function PlayerInner({
             {formatTime(displayedPositionMs)}
           </Text>
           <Text className="text-xs text-gray-500 dark:text-gray-400">
-            -{formatTime(Math.max(0, playerState.durationMs - displayedPositionMs))}
+            -
+            {formatTime(
+              Math.max(0, playerState.durationMs - displayedPositionMs),
+            )}
           </Text>
         </View>
       </View>
 
       {/* Transport Controls */}
-      <View className="flex-row items-center justify-center py-4 px-6" style={{ gap: 24 }}>
+      <View
+        className="flex-row items-center justify-center py-4 px-6"
+        style={{ gap: 24 }}
+      >
         <TouchableOpacity onPress={controls.prevChapter} className="p-2">
           <Ionicons name="play-skip-back" size={24} color={iconColor} />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => controls.seekBy(-30000)} className="p-2">
+        <TouchableOpacity
+          onPress={() => controls.seekBy(-30000)}
+          className="p-2"
+        >
           <Ionicons name="play-back" size={28} color={iconColor} />
           <Text
             className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
@@ -550,7 +781,10 @@ function PlayerInner({
           />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => controls.seekBy(30000)} className="p-2">
+        <TouchableOpacity
+          onPress={() => controls.seekBy(30000)}
+          className="p-2"
+        >
           <Ionicons name="play-forward" size={28} color={iconColor} />
           <Text
             className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
@@ -567,27 +801,27 @@ function PlayerInner({
 
       {/* Bottom controls */}
       <View className="flex-row items-center justify-around px-6 py-4 border-t border-gray-200 dark:border-gray-800">
-        <TouchableOpacity
-          onPress={onToggleSpeedMenu}
-          className="items-center"
-        >
+        <TouchableOpacity onPress={onToggleSpeedMenu} className="items-center">
           <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
             {playerState.playbackSpeed}x
           </Text>
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Speed</Text>
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Speed
+          </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={onToggleChapters}
-          className="items-center"
-        >
+        <TouchableOpacity onPress={onToggleChapters} className="items-center">
           <Ionicons name="list" size={20} color={iconColor} />
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Chapters</Text>
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Chapters
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={onManualSync} className="items-center">
           <Ionicons name="sync" size={20} color={iconColor} />
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Sync</Text>
+          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Sync
+          </Text>
         </TouchableOpacity>
       </View>
 

@@ -27,6 +27,7 @@ const localStorageAdapter = {
 };
 
 const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+const REMOTE_POSITION_PROMPT_DELAY_MS = 12_000;
 
 export function Player({
   book,
@@ -46,12 +47,41 @@ export function Player({
   const [initialLoaded, setInitialLoaded] = useState(false);
   const [initialChapter, setInitialChapter] = useState(0);
   const [initialPosition, setInitialPosition] = useState(0);
+  const [localInitResolved, setLocalInitResolved] = useState(false);
+  const [showOfflinePrompt, setShowOfflinePrompt] = useState(false);
+  const [networkStatus, setNetworkStatus] = useState<
+    "unknown" | "online" | "offline"
+  >("unknown");
 
   const syncEngineRef = useRef<SyncEngine | null>(null);
+  const initialLoadedRef = useRef(false);
+  const usedFallbackStartupRef = useRef(false);
+  const playbackProgressedRef = useRef(false);
+  const lateRemoteAppliedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
 
+  useEffect(() => {
+    initialLoadedRef.current = initialLoaded;
+  }, [initialLoaded]);
+
+  useEffect(() => {
+    const updateStatus = () => {
+      setNetworkStatus(window.navigator.onLine ? "online" : "offline");
+    };
+
+    updateStatus();
+    window.addEventListener("online", updateStatus);
+    window.addEventListener("offline", updateStatus);
+
+    return () => {
+      window.removeEventListener("online", updateStatus);
+      window.removeEventListener("offline", updateStatus);
+    };
+  }, []);
+
   const convexId = book.convexId;
+  const syncStorageKey = convexId || `local_${book.name}_${book.checksum}`;
   const remotePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip"
@@ -74,39 +104,73 @@ export function Player({
     })();
   }, [convexId, book, getOrCreate, onConvexIdResolved]);
 
-  // Load initial position from remote or local
+  // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
     if (initialLoaded) return;
+    if (remotePosition === undefined) return;
 
-    if (remotePosition !== undefined) {
-      if (remotePosition) {
-        setInitialChapter(remotePosition.chapterIndex);
-        setInitialPosition(remotePosition.positionMs);
+    if (remotePosition) {
+      setInitialChapter(remotePosition.chapterIndex);
+      setInitialPosition(remotePosition.positionMs);
+    }
+    usedFallbackStartupRef.current = false;
+    setShowOfflinePrompt(false);
+    setInitialLoaded(true);
+  }, [remotePosition, initialLoaded]);
+
+  // If local state is ready first, only show the warning immediately when
+  // the desktop is offline. Otherwise keep waiting for the remote sync.
+  useEffect(() => {
+    if (initialLoaded || !localInitResolved) return;
+    if (remotePosition !== undefined) return;
+
+    if (convexId) {
+      if (networkStatus === "offline") {
+        setShowOfflinePrompt(true);
       }
-      setInitialLoaded(true);
-    } else if (!convexId) {
-      // No convex ID, check local storage
-      const stored = localStorage.getItem(
-        `audiobook_sync_${book.name}_${book.checksum}`
-      );
-      if (stored) {
-        try {
-          const pos = JSON.parse(stored);
-          setInitialChapter(pos.chapterIndex || 0);
-          setInitialPosition(pos.positionMs || 0);
-        } catch {
-          // ignore
-        }
-      }
+    } else {
       setInitialLoaded(true);
     }
-  }, [remotePosition, convexId, initialLoaded, book]);
+  }, [convexId, initialLoaded, localInitResolved, networkStatus, remotePosition]);
+
+  // If remote sync stays unresolved for a while even while online, then
+  // let the user decide whether to continue from local state.
+  useEffect(() => {
+    if (initialLoaded || showOfflinePrompt) return;
+    if (!convexId || remotePosition !== undefined || !localInitResolved) return;
+
+    const timeoutId = setTimeout(() => {
+      if (initialLoadedRef.current) return;
+      setShowOfflinePrompt(true);
+    }, REMOTE_POSITION_PROMPT_DELAY_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [initialLoaded, showOfflinePrompt, localInitResolved, remotePosition, convexId]);
+
+  const handleContinueOffline = useCallback(() => {
+    usedFallbackStartupRef.current = true;
+    setShowOfflinePrompt(false);
+    setInitialLoaded(true);
+  }, []);
 
   const seekToRef = useRef<((chapter: number, ms: number) => void) | null>(null);
 
+  // If we started from fallback state, adopt remote position once
+  // if playback has not progressed yet.
+  useEffect(() => {
+    if (!initialLoaded || !remotePosition) return;
+    if (!usedFallbackStartupRef.current) return;
+    if (lateRemoteAppliedRef.current || playbackProgressedRef.current) return;
+
+    lateRemoteAppliedRef.current = true;
+    setInitialChapter(remotePosition.chapterIndex);
+    setInitialPosition(remotePosition.positionMs);
+    seekToRef.current?.(remotePosition.chapterIndex, remotePosition.positionMs);
+  }, [initialLoaded, remotePosition]);
+
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
-    const storageKey = convexId || `local_${book.name}_${book.checksum}`;
+    let cancelled = false;
 
     const pushFn = async (position: {
       audiobookId: string;
@@ -127,38 +191,58 @@ export function Player({
       };
     };
 
-    const onRemoteNewer = (remote: { chapterIndex: number; positionMs: number }) => {
+    const onRemoteNewer = (remote: {
+      chapterIndex: number;
+      positionMs: number;
+    }) => {
       seekToRef.current?.(remote.chapterIndex, remote.positionMs);
     };
 
-    const engine = new SyncEngine(storageKey, localStorageAdapter, pushFn, onRemoteNewer);
+    const engine = new SyncEngine(
+      syncStorageKey,
+      localStorageAdapter,
+      pushFn,
+      onRemoteNewer,
+    );
     syncEngineRef.current = engine;
 
     const unsub = engine.subscribe(setSyncState);
 
     (async () => {
-      const localPos = await engine.initialize();
-      if (localPos && !initialLoaded) {
-        setInitialChapter(localPos.chapterIndex);
-        setInitialPosition(localPos.positionMs);
+      try {
+        const localPos = await engine.initialize();
+        if (cancelled) return;
+        if (localPos && !initialLoadedRef.current) {
+          setInitialChapter(localPos.chapterIndex);
+          setInitialPosition(localPos.positionMs);
+        }
+      } finally {
+        if (!cancelled) {
+          setLocalInitResolved(true);
+        }
       }
     })();
 
     return () => {
+      cancelled = true;
       unsub();
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition, book.name, book.checksum, initialLoaded]);
+  }, [convexId, updatePosition, book.name, book.checksum, syncStorageKey]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
+      if (chapterIndex > 0 || positionMs > 0) {
+        playbackProgressedRef.current = true;
+      }
       syncEngineRef.current?.updatePosition(chapterIndex, positionMs);
     },
     []
   );
 
   const handleChapterChange = useCallback(() => {
+    playbackProgressedRef.current = true;
     syncEngineRef.current?.onChapterChange();
   }, []);
 
@@ -167,10 +251,55 @@ export function Player({
   }, []);
 
   const handlePlay = useCallback(() => {
+    playbackProgressedRef.current = true;
     syncEngineRef.current?.onPlay();
   }, []);
 
   if (!initialLoaded) {
+    if (showOfflinePrompt) {
+      return (
+        <div className="min-h-screen bg-background flex items-center justify-center">
+          <div className="max-w-sm text-center space-y-4 px-6">
+            <svg
+              className="mx-auto h-12 w-12 text-primary"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+              />
+            </svg>
+            <h2 className="text-lg font-semibold text-foreground">
+              Unable to Sync
+            </h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              The latest position for &ldquo;{book.name}&rdquo; couldn&rsquo;t
+              be loaded from the server. Continuing with your local position may
+              cause sync conflicts if you&rsquo;ve listened on another device.
+            </p>
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={handleContinueOffline}
+                className="w-full px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                Continue with Local Position
+              </button>
+              <button
+                onClick={onBack}
+                className="w-full px-4 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Go Back
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="animate-pulse text-muted-foreground text-sm">
