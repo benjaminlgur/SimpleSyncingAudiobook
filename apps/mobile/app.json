@@ -2,7 +2,7 @@
   "expo": {
     "name": "Simple Syncing Audiobook",
     "slug": "simple-syncing-audiobook",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "orientation": "portrait",
     "scheme": "simple-syncing-audiobook",
     "userInterfaceStyle": "automatic",
