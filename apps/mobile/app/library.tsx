@@ -21,6 +21,7 @@ import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { useConvexContext } from "./_layout";
 import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
+import { AppScreen } from "../components/AppScreen";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { getScopedStorageKey } from "../lib/storageScope";
 import { useTheme } from "../hooks/useTheme";
@@ -705,16 +706,19 @@ export default function LibraryScreen() {
 
   if (!storageScope || !storageReady || !deviceId) {
     return (
-      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center">
-        <Text className="text-sm text-gray-500 dark:text-gray-400">
-          Loading library...
-        </Text>
-      </View>
+      <AppScreen isDark={isDark}>
+        <View className="flex-1 items-center justify-center">
+          <Text className="text-sm text-gray-500 dark:text-gray-400">
+            Loading library...
+          </Text>
+        </View>
+      </AppScreen>
     );
   }
 
   return (
-    <View className="flex-1 bg-white dark:bg-gray-950">
+    <AppScreen isDark={isDark}>
+      <View className="flex-1">
       {/* Header */}
       <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200 dark:border-gray-800">
         <Text className="text-xl font-bold text-gray-900 dark:text-gray-100">Library</Text>
@@ -967,6 +971,7 @@ export default function LibraryScreen() {
           onClose={() => setLinkingBook(null)}
         />
       )}
-    </View>
+      </View>
+    </AppScreen>
   );
 }

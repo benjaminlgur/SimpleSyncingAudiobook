@@ -8,8 +8,11 @@ import { View, Text, TouchableOpacity } from "react-native";
 import { useColorScheme } from "nativewind";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
+import * as SystemUI from "expo-system-ui";
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ThemeProvider } from "../hooks/useTheme";
+import { AppScreen } from "../components/AppScreen";
 import { api } from "../../../convex/_generated/api";
 import {
   ACTIVE_STORAGE_SCOPE_KEY,
@@ -59,25 +62,42 @@ export function useConvexContext() {
   return useContext(ConvexContext);
 }
 
+function getBackgroundColor(isDark: boolean) {
+  return isDark ? "#030712" : "#ffffff";
+}
+
+function RootSystemChrome() {
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === "dark";
+  const backgroundColor = getBackgroundColor(isDark);
+
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(backgroundColor).catch(() => {
+      // Ignore unsupported environments.
+    });
+  }, [backgroundColor]);
+
+  return (
+    <StatusBar
+      style={isDark ? "light" : "dark"}
+      hidden={false}
+      translucent={false}
+      backgroundColor={backgroundColor}
+    />
+  );
+}
+
 function LayoutInner() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
 
   return (
-    <>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: isDark ? "#030712" : "#fff" },
-        }}
-      />
-      <StatusBar
-        style={isDark ? "light" : "dark"}
-        hidden={false}
-        translucent={false}
-        backgroundColor={isDark ? "#030712" : "#ffffff"}
-      />
-    </>
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: getBackgroundColor(isDark) },
+      }}
+    />
   );
 }
 
@@ -180,66 +200,72 @@ function HostedAuthGate({
 
   if ((isLoading || signingIn) && !error) {
     return (
-      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center px-8">
-        <Ionicons name="sync" size={32} color="#f97316" />
-        <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
-          {signingIn ? "Finishing sign-in..." : "Connecting..."}
-        </Text>
-      </View>
+      <AppScreen isDark={isDark}>
+        <View className="flex-1 items-center justify-center px-8">
+          <Ionicons name="sync" size={32} color="#f97316" />
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
+            {signingIn ? "Finishing sign-in..." : "Connecting..."}
+          </Text>
+        </View>
+      </AppScreen>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <View className="flex-1 bg-white dark:bg-gray-950 justify-center px-6">
-        <View className="items-center mb-8">
-          <Ionicons name="book" size={56} color="#f97316" />
-          <Text className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-4">
-            Sign in to continue
-          </Text>
-          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center">
-            Authenticate with Google to sync your audiobooks.
-          </Text>
+      <AppScreen isDark={isDark}>
+        <View className="flex-1 justify-center px-6">
+          <View className="items-center mb-8">
+            <Ionicons name="book" size={56} color="#f97316" />
+            <Text className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-4">
+              Sign in to continue
+            </Text>
+            <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center">
+              Authenticate with Google to sync your audiobooks.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            onPress={handleSignIn}
+            disabled={signingIn}
+            className="flex-row items-center justify-center border border-gray-300 dark:border-gray-700 rounded-xl py-3.5 bg-white dark:bg-gray-900"
+            style={{ opacity: signingIn ? 0.6 : 1 }}
+          >
+            <Ionicons
+              name="logo-google"
+              size={20}
+              color={isDark ? "#e5e7eb" : "#374151"}
+              style={{ marginRight: 10 }}
+            />
+            <Text className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              Sign in with Google
+            </Text>
+          </TouchableOpacity>
+
+          {error ? (
+            <Text className="text-sm text-red-500 mt-4 text-center">{error}</Text>
+          ) : null}
+
+          <TouchableOpacity onPress={onDisconnect} className="py-3 mt-4">
+            <Text className="text-xs text-gray-400 dark:text-gray-500 text-center">
+              Back to setup
+            </Text>
+          </TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          onPress={handleSignIn}
-          disabled={signingIn}
-          className="flex-row items-center justify-center border border-gray-300 dark:border-gray-700 rounded-xl py-3.5 bg-white dark:bg-gray-900"
-          style={{ opacity: signingIn ? 0.6 : 1 }}
-        >
-          <Ionicons
-            name="logo-google"
-            size={20}
-            color={isDark ? "#e5e7eb" : "#374151"}
-            style={{ marginRight: 10 }}
-          />
-          <Text className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            Sign in with Google
-          </Text>
-        </TouchableOpacity>
-
-        {error ? (
-          <Text className="text-sm text-red-500 mt-4 text-center">{error}</Text>
-        ) : null}
-
-        <TouchableOpacity onPress={onDisconnect} className="py-3 mt-4">
-          <Text className="text-xs text-gray-400 dark:text-gray-500 text-center">
-            Back to setup
-          </Text>
-        </TouchableOpacity>
-      </View>
+      </AppScreen>
     );
   }
 
   if (viewerScope === undefined) {
     return (
-      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center px-8">
-        <Ionicons name="person-circle-outline" size={32} color="#f97316" />
-        <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
-          Loading account...
-        </Text>
-      </View>
+      <AppScreen isDark={isDark}>
+        <View className="flex-1 items-center justify-center px-8">
+          <Ionicons name="person-circle-outline" size={32} color="#f97316" />
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
+            Loading account...
+          </Text>
+        </View>
+      </AppScreen>
     );
   }
 
@@ -330,8 +356,10 @@ export default function RootLayout() {
     client,
   };
 
+  let content: ReactNode;
+
   if (mode === "hosted" && client && convexUrl) {
-    return (
+    content = (
       <ConvexAuthProvider
         client={client}
         storage={asyncStorageTokenStorage}
@@ -349,25 +377,28 @@ export default function RootLayout() {
         </HostedAuthGate>
       </ConvexAuthProvider>
     );
+  } else {
+    const selfHostedStorageScope =
+      loaded && convexUrl && mode === "self-hosted"
+        ? getSelfHostedStorageScope(convexUrl)
+        : null;
+
+    const app = (
+      <AppChrome
+        contextValue={{
+          ...baseContext,
+          storageScope: selfHostedStorageScope,
+        }}
+      />
+    );
+
+    content = client ? <ConvexProvider client={client}>{app}</ConvexProvider> : app;
   }
 
-  const selfHostedStorageScope =
-    loaded && convexUrl && mode === "self-hosted"
-      ? getSelfHostedStorageScope(convexUrl)
-      : null;
-
-  const app = (
-    <AppChrome
-      contextValue={{
-        ...baseContext,
-        storageScope: selfHostedStorageScope,
-      }}
-    />
+  return (
+    <SafeAreaProvider>
+      <RootSystemChrome />
+      {content}
+    </SafeAreaProvider>
   );
-
-  if (client) {
-    return <ConvexProvider client={client}>{app}</ConvexProvider>;
-  }
-
-  return app;
 }

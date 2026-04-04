@@ -27,6 +27,7 @@ import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useConvexContext } from "./_layout";
+import { AppScreen } from "../components/AppScreen";
 import { getScopedStorageKey } from "../lib/storageScope";
 import { useTheme } from "../hooks/useTheme";
 
@@ -151,6 +152,7 @@ export default function PlayerScreen() {
   const { bookKey } = useLocalSearchParams<{ bookKey: string }>();
   const router = useRouter();
   const { storageScope, mode } = useConvexContext();
+  const { isDark } = useTheme();
   const [book, setBook] = useState<LocalAudiobook | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
@@ -498,40 +500,44 @@ export default function PlayerScreen() {
   if (!book || !initialLoaded) {
     if (showOfflinePrompt && book) {
       return (
-        <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center px-8">
-          <Ionicons name="cloud-offline-outline" size={48} color="#f97316" />
-          <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4 text-center">
-            Unable to Sync
-          </Text>
-          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center leading-5">
-            The latest position for "{book.name}" couldn't be loaded from the
-            server. Continuing with your local position may cause sync conflicts
-            if you've listened on another device.
-          </Text>
-          <TouchableOpacity
-            onPress={handleContinueOffline}
-            className="mt-6 bg-primary rounded-xl px-6 py-3"
-          >
-            <Text className="text-white font-medium text-sm">
-              Continue with Local Position
+        <AppScreen isDark={isDark}>
+          <View className="flex-1 items-center justify-center px-8">
+            <Ionicons name="cloud-offline-outline" size={48} color="#f97316" />
+            <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4 text-center">
+              Unable to Sync
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.back()} className="mt-3 py-2">
-            <Text className="text-sm text-gray-500 dark:text-gray-400">
-              Go Back
+            <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center leading-5">
+              The latest position for "{book.name}" couldn't be loaded from the
+              server. Continuing with your local position may cause sync conflicts
+              if you've listened on another device.
             </Text>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              onPress={handleContinueOffline}
+              className="mt-6 bg-primary rounded-xl px-6 py-3"
+            >
+              <Text className="text-white font-medium text-sm">
+                Continue with Local Position
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.back()} className="mt-3 py-2">
+              <Text className="text-sm text-gray-500 dark:text-gray-400">
+                Go Back
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </AppScreen>
       );
     }
 
     return (
-      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center">
-        <ActivityIndicator size="small" color="#f97316" />
-        <Text className="text-gray-500 dark:text-gray-400 text-sm mt-3">
-          Loading...
-        </Text>
-      </View>
+      <AppScreen isDark={isDark}>
+        <View className="flex-1 items-center justify-center">
+          <ActivityIndicator size="small" color="#f97316" />
+          <Text className="text-gray-500 dark:text-gray-400 text-sm mt-3">
+            Loading...
+          </Text>
+        </View>
+      </AppScreen>
     );
   }
 
@@ -736,7 +742,8 @@ function PlayerInner({
   const mutedColor = isDark ? "#9ca3af" : "#6b7280";
 
   return (
-    <View className="flex-1 bg-white dark:bg-gray-950">
+    <AppScreen isDark={isDark}>
+      <View className="flex-1">
       {/* Header */}
       <View className="px-4 pt-2 pb-3 flex-row items-center justify-between">
         <TouchableOpacity onPress={onBack} className="flex-row items-center">
@@ -1056,6 +1063,7 @@ function PlayerInner({
           </View>
         </TouchableOpacity>
       </Modal>
-    </View>
+      </View>
+    </AppScreen>
   );
 }
