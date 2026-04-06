@@ -7,12 +7,14 @@ interface LinkingDialogProps {
   audiobookId: string;
   audiobookName: string;
   onClose: () => void;
+  onLinksChanged?: () => void;
 }
 
 export function LinkingDialog({
   audiobookId,
   audiobookName,
   onClose,
+  onLinksChanged,
 }: LinkingDialogProps) {
   const [tab, setTab] = useState<"linked" | "available">("linked");
 
@@ -99,6 +101,7 @@ export function LinkingDialog({
                         audiobookId: audiobookId as Id<"audiobooks">,
                         peerId: book._id,
                       });
+                      onLinksChanged?.();
                     }}
                     className="text-xs text-destructive hover:underline"
                   >
@@ -129,6 +132,7 @@ export function LinkingDialog({
                       canonicalId: audiobookId as Id<"audiobooks">,
                       linkedId: book._id,
                     });
+                    onLinksChanged?.();
                   }}
                   className="text-xs text-primary hover:underline"
                 >

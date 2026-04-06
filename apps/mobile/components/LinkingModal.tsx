@@ -17,6 +17,7 @@ interface LinkingModalProps {
   audiobookId: string;
   audiobookName: string;
   onClose: () => void;
+  onLinksChanged?: () => void;
 }
 
 export function LinkingModal({
@@ -24,6 +25,7 @@ export function LinkingModal({
   audiobookId,
   audiobookName,
   onClose,
+  onLinksChanged,
 }: LinkingModalProps) {
   const [tab, setTab] = useState<"linked" | "available">("linked");
 
@@ -100,10 +102,13 @@ export function LinkingModal({
                       </Text>
                     </View>
                     <TouchableOpacity
-                      onPress={() => unlinkMutation({
-                        audiobookId: audiobookId as Id<"audiobooks">,
-                        peerId: item._id,
-                      })}
+                      onPress={async () => {
+                        await unlinkMutation({
+                          audiobookId: audiobookId as Id<"audiobooks">,
+                          peerId: item._id,
+                        });
+                        onLinksChanged?.();
+                      }}
                     >
                       <Text className="text-xs text-red-500">Unlink</Text>
                     </TouchableOpacity>
@@ -130,12 +135,13 @@ export function LinkingModal({
                     </Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() =>
-                      linkMutation({
+                    onPress={async () => {
+                      await linkMutation({
                         canonicalId: audiobookId as Id<"audiobooks">,
                         linkedId: item._id,
-                      })
-                    }
+                      });
+                      onLinksChanged?.();
+                    }}
                   >
                     <Text className="text-xs text-primary">Link</Text>
                   </TouchableOpacity>

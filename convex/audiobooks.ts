@@ -219,6 +219,15 @@ async function findOwnedLinksByCanonicalId(
   return links.filter((link) => matchesUserId(link.userId, identity));
 }
 
+async function resolveCanonicalAudiobookId(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+  audiobookId: Id<"audiobooks">,
+): Promise<Id<"audiobooks">> {
+  const ownedLink = (await findOwnedLinksByLinkedId(ctx, identity, audiobookId))[0];
+  return ownedLink ? ownedLink.canonicalId : audiobookId;
+}
+
 export const getOrCreate = mutation({
   args: {
     name: v.string(),
@@ -289,16 +298,26 @@ export const listRemoteForDevice = query({
     const localCopies = allUserCopies.filter(
       (row) => row.deviceId === args.deviceId,
     );
-    const localAudiobookIds = new Set(localCopies.map((row) => row.audiobookId));
+    const localCanonicalIds = new Set<Id<"audiobooks">>();
+    for (const copy of localCopies) {
+      localCanonicalIds.add(
+        await resolveCanonicalAudiobookId(ctx, identity, copy.audiobookId),
+      );
+    }
 
-    const remoteAudiobookIds = new Set<Id<"audiobooks">>();
+    const remoteCanonicalIds = new Set<Id<"audiobooks">>();
     for (const copy of allUserCopies) {
-      if (localAudiobookIds.has(copy.audiobookId)) continue;
-      remoteAudiobookIds.add(copy.audiobookId);
+      const canonicalId = await resolveCanonicalAudiobookId(
+        ctx,
+        identity,
+        copy.audiobookId,
+      );
+      if (localCanonicalIds.has(canonicalId)) continue;
+      remoteCanonicalIds.add(canonicalId);
     }
 
     const books = [];
-    for (const audiobookId of remoteAudiobookIds) {
+    for (const audiobookId of remoteCanonicalIds) {
       const book = await ctx.db.get(audiobookId);
       if (book) books.push(book);
     }

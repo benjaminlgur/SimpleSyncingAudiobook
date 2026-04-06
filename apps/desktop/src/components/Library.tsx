@@ -516,6 +516,7 @@ export function Library({
         <LinkingDialog
           audiobookId={linkingBook.convexId}
           audiobookName={linkingBook.name}
+          onLinksChanged={() => setRefreshToken((prev) => prev + 1)}
           onClose={() => setLinkingBook(null)}
         />
       )}

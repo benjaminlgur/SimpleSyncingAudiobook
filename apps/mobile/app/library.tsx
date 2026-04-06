@@ -968,6 +968,7 @@ export default function LibraryScreen() {
           visible={!!linkingBook}
           audiobookId={linkingBook.convexId}
           audiobookName={linkingBook.name}
+          onLinksChanged={() => setRefreshToken((prev) => prev + 1)}
           onClose={() => setLinkingBook(null)}
         />
       )}
