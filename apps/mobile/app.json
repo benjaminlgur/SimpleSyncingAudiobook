@@ -3,13 +3,15 @@
     "name": "Simple Syncing Audiobook",
     "slug": "simple-syncing-audiobook",
     "version": "0.3.2",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "scheme": "simple-syncing-audiobook",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#f97316"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       },
       "package": "com.simplesyncing.audiobook"
     },
