@@ -80,7 +80,7 @@ export function useAudioPlayer(
   }, []);
 
   const loadChapter = useCallback(
-    async (index: number, seekMs = 0) => {
+    async (index: number, seekMs = 0, forcePlay = false) => {
       if (index < 0 || index >= chapters.length) return;
 
       const chapter = chapters[index];
@@ -94,7 +94,7 @@ export function useAudioPlayer(
       }));
 
       const audio = getOrCreateAudio();
-      const wasPlaying = !audio.paused;
+      const shouldPlayAfterLoad = forcePlay || !audio.paused;
 
       const sameFile = loadedFileRef.current === chapter.filename && audio.src;
 
@@ -160,7 +160,7 @@ export function useAudioPlayer(
         }));
       }
 
-      if (wasPlaying) {
+      if (shouldPlayAfterLoad) {
         try {
           await audio.play();
           setState((s) => ({ ...s, isPlaying: true }));
@@ -182,7 +182,7 @@ export function useAudioPlayer(
     const handleEnded = () => {
       const nextIndex = stateRef.current.currentChapterIndex + 1;
       if (nextIndex < chapters.length) {
-        loadChapter(nextIndex, 0);
+        loadChapter(nextIndex, 0, true);
         onChapterChange?.(nextIndex);
       } else {
         setState((s) => ({ ...s, isPlaying: false }));
