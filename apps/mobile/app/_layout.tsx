@@ -22,6 +22,7 @@ import {
 import { HOSTED_CONVEX_URL } from "../lib/runtimeConfig";
 import "../index";
 import "../global.css";
+import { stopPlaybackSession } from "../lib/playbackSession";
 
 SplashScreen.preventAutoHideAsync();
 WebBrowser.maybeCompleteAuthSession();
@@ -102,6 +103,7 @@ function LayoutInner() {
 }
 
 function AppChrome({ contextValue }: { contextValue: ConvexContextType }) {
+  useEffect(() => () => { void stopPlaybackSession(); }, [contextValue.storageScope]);
   useEffect(() => {
     if (!contextValue.storageScope) return;
     void AsyncStorage.setItem(

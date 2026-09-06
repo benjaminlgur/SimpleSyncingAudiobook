@@ -15,7 +15,8 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
-import { SyncEngine } from "@audiobook/shared";
+import { SyncEngine, fromSyncPosition, toSyncPosition } from "@audiobook/shared";
+import { capturePlaybackPosition, flushPlaybackSession, getPlaybackSession, openPlaybackSession } from "../lib/playbackSession";
 import type {
   SyncState,
   SyncPushResult,
@@ -288,27 +289,31 @@ export default function PlayerScreen() {
   }, [bookKey]);
 
   const convexId = book?.convexId;
-  const syncIdentity = book
-    ? convexId || `local_${book.name}_${book.checksum}`
-    : null;
+  const syncIdentity = book ? `local_${book.name}_${book.checksum}` : null;
+  const sessionKey = `${storageScope}:${bookKey}`;
   const scopedStorageAdapter = useMemo(
     () =>
       storageScope
         ? {
             getItem: (key: string) =>
-              asyncStorageAdapter.getItem(`${storageScope}:${key}`),
+              asyncStorageAdapter.getItem(`${storageScope}:${key}`).then((value) =>
+                value ?? (convexId ? asyncStorageAdapter.getItem(`${storageScope}:audiobook_sync_${convexId}`) : null)),
             setItem: (key: string, value: string) =>
               asyncStorageAdapter.setItem(`${storageScope}:${key}`, value),
             removeItem: (key: string) =>
               asyncStorageAdapter.removeItem(`${storageScope}:${key}`),
           }
         : null,
-    [storageScope],
+    [storageScope, convexId],
   );
-  const remotePosition = useQuery(
+  const remoteWirePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
   );
+
+  const remotePosition = useMemo(() => remoteWirePosition && book && ({
+    ...remoteWirePosition, ...fromSyncPosition(book.chapters, remoteWirePosition),
+  }), [remoteWirePosition, book]);
 
   useEffect(() => {
     if (!syncIdentity) return;
@@ -387,17 +392,19 @@ export default function PlayerScreen() {
 
   // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
-    if (initialLoaded || !book) return;
+    if (initialLoaded || !book || !localInitResolved) return;
     if (remotePosition === undefined) return;
 
-    if (remotePosition) {
-      setInitialChapter(remotePosition.chapterIndex);
-      setInitialPosition(remotePosition.positionMs);
+    const position = syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (position) {
+      setInitialChapter(position.chapterIndex);
+      setInitialPosition(position.positionMs);
     }
+    initialLoadedRef.current = true;
     usedFallbackStartupRef.current = false;
     setShowOfflinePrompt(false);
     setInitialLoaded(true);
-  }, [remotePosition, initialLoaded, book]);
+  }, [remotePosition, initialLoaded, book, localInitResolved]);
 
   // If local state is ready first, only show the warning immediately when
   // we know the device is offline. Otherwise keep waiting for the remote sync.
@@ -456,12 +463,12 @@ export default function PlayerScreen() {
     if (lateRemoteAppliedRef.current || playbackProgressedRef.current) return;
 
     lateRemoteAppliedRef.current = true;
-    setInitialChapter(remotePosition.chapterIndex);
-    setInitialPosition(remotePosition.positionMs);
-    void controlsRef.current?.skipToChapter(
-      remotePosition.chapterIndex,
-      remotePosition.positionMs,
-    );
+    const position = syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (position) {
+      setInitialChapter(position.chapterIndex);
+      setInitialPosition(position.positionMs);
+      void controlsRef.current?.skipToChapter(position.chapterIndex, position.positionMs);
+    }
   }, [book, initialLoaded, remotePosition]);
 
   // Initialize sync engine — works with or without a Convex ID.
@@ -477,58 +484,46 @@ export default function PlayerScreen() {
     }): Promise<SyncPushResult> => {
       if (!convexId) throw new Error("No Convex ID yet");
       const result = await updatePosition({
-        audiobookId: position.audiobookId as Id<"audiobooks">,
-        chapterIndex: position.chapterIndex,
-        positionMs: position.positionMs,
+        audiobookId: convexId as Id<"audiobooks">,
+        ...toSyncPosition(book.chapters, position),
         clientUpdatedAt: position.updatedAt,
       });
       return {
         accepted: result.accepted,
-        serverPosition: result.serverPosition,
+        serverPosition: result.serverPosition && {
+          ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
+        },
       };
     };
 
-    const onRemoteNewer = (remote: {
-      chapterIndex: number;
-      positionMs: number;
-    }) => {
-      controlsRef.current?.skipToChapter(
-        remote.chapterIndex,
-        remote.positionMs,
-      );
-    };
-
-    const engine = new SyncEngine(
-      syncIdentity,
-      scopedStorageAdapter,
-      pushFn,
-      onRemoteNewer,
-    );
-    syncEngineRef.current = engine;
-    const unsub = engine.subscribe(setSyncState);
-
-    (async () => {
-      try {
-        const localPos = await engine.initialize();
-        if (cancelled) return;
-        if (localPos && !initialLoadedRef.current) {
-          setInitialChapter(localPos.chapterIndex);
-          setInitialPosition(localPos.positionMs);
-        }
-      } finally {
-        if (!cancelled) {
-          setLocalInitResolved(true);
-        }
+    let unsub: (() => void) | undefined;
+    void (async () => {
+      const session = await openPlaybackSession(sessionKey, syncIdentity, book.chapters, scopedStorageAdapter, pushFn, () => !cancelled);
+      if (cancelled) return;
+      syncEngineRef.current = session.engine;
+      unsub = session.engine.subscribe(setSyncState);
+      await capturePlaybackPosition(session);
+      if (cancelled) return;
+      const localPos = session.engine.getState().pending;
+      if (localPos && !initialLoadedRef.current) {
+        setInitialChapter(localPos.chapterIndex);
+        setInitialPosition(localPos.positionMs);
       }
-    })();
+      setLocalInitResolved(true);
+    })().catch((error: unknown) => {
+      if (cancelled) return;
+      setSyncState((state) => ({ ...state, status: "error", lastError: error instanceof Error ? error.message : "Unable to restore playback" }));
+      setLocalInitResolved(true);
+    });
 
     return () => {
       cancelled = true;
-      unsub();
-      engine.destroy();
+      unsub?.();
+      // The native playback service owns the engine after the screen closes.
+      if (getPlaybackSession(sessionKey)?.ready) void flushPlaybackSession();
       syncEngineRef.current = null;
     };
-  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition, book]);
+  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition, book, sessionKey]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
@@ -551,7 +546,7 @@ export default function PlayerScreen() {
 
   const handlePlay = useCallback(() => {
     playbackProgressedRef.current = true;
-    syncEngineRef.current?.onPlay();
+    // Playback-state events start sync timers, including notification controls.
   }, []);
 
   if (!book || !initialLoaded) {
@@ -603,6 +598,7 @@ export default function PlayerScreen() {
   return (
     <PlayerInner
       book={book}
+      sessionKey={sessionKey}
       fileUris={fileUris}
       initialChapter={initialChapter}
       initialPosition={initialPosition}
@@ -624,6 +620,7 @@ export default function PlayerScreen() {
 
 interface PlayerInnerProps {
   book: LocalAudiobook;
+  sessionKey: string;
   fileUris: string[];
   initialChapter: number;
   initialPosition: number;
@@ -645,6 +642,7 @@ interface PlayerInnerProps {
 
 function PlayerInner({
   book,
+  sessionKey,
   fileUris,
   initialChapter,
   initialPosition,
@@ -667,6 +665,7 @@ function PlayerInner({
   const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
 
   const [playerState, controls] = useMobileAudioPlayer({
+    sessionKey,
     fileUris,
     chapters: book.chapters,
     initialChapterIndex: initialChapter,

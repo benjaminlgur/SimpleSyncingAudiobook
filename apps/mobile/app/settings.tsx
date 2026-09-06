@@ -5,6 +5,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexContext } from "./_layout";
 import { AppScreen } from "../components/AppScreen";
 import { useTheme } from "../hooks/useTheme";
+import { stopPlaybackSession } from "../lib/playbackSession";
 
 type ThemePreference = "light" | "dark" | "system";
 
@@ -20,6 +21,7 @@ function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
 
   const handleSignOut = async () => {
     try {
+      await stopPlaybackSession();
       await signOut();
     } catch {
       // May fail if already signed out

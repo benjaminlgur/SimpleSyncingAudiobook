@@ -8,19 +8,26 @@
     "build:desktop": "pnpm --filter @audiobook/desktop build",
     "build:shared": "pnpm --filter @audiobook/shared build",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p convex/tsconfig.json && tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/mobile/tsconfig.json"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^25.5.0",
-    "convex": "^1.17.0",
-    "typescript": "^5.7.0"
+    "@types/react-test-renderer": "18.3.1",
+    "convex": "^1.45.0",
+    "convex-test": "^0.0.56",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
     ]
   },
-  "version": "0.4.4",
+  "version": "0.4.5",
   "dependencies": {
     "@auth/core": "0.37.0",
     "@convex-dev/auth": "^0.0.91",

@@ -21,7 +21,7 @@
     "@tauri-apps/plugin-fs": "^2.0.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
-    "convex": "^1.17.0",
+    "convex": "^1.45.0",
     "lucide-react": "^0.460.0",
     "music-metadata": "^11.12.3",
     "react": "^18.3.1",

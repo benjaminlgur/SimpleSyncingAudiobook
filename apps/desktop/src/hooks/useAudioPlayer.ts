@@ -57,6 +57,8 @@ export function useAudioPlayer(
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const positionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const loadedFileRef = useRef<string | null>(null);
+  const loadRequestRef = useRef(0);
+  const loadingRef = useRef(false);
 
   const [state, setState] = useState<AudioPlayerState>({
     isPlaying: false,
@@ -79,9 +81,20 @@ export function useAudioPlayer(
     return audioRef.current;
   }, []);
 
+  const capturePosition = useCallback(() => {
+    const audio = audioRef.current;
+    const index = stateRef.current.currentChapterIndex;
+    if (!audio || loadingRef.current) return;
+    const chapter = chapters[index];
+    const offset = chapter && isVirtualChapter(chapter) ? chapter.startMs! : 0;
+    onPositionUpdate?.(index, Math.max(0, audio.currentTime * 1000 - offset));
+  }, [chapters, onPositionUpdate]);
+
   const loadChapter = useCallback(
-    async (index: number, seekMs = 0, forcePlay = false) => {
+    async (index: number, seekMs = 0, forcePlay = false, publish = true) => {
       if (index < 0 || index >= chapters.length) return;
+      const request = ++loadRequestRef.current;
+      loadingRef.current = true;
 
       const chapter = chapters[index];
       const virtual = isVirtualChapter(chapter);
@@ -102,6 +115,7 @@ export function useAudioPlayer(
         audio.pause();
         try {
           const blobUrl = await loadAudioFileAsBlob(folderPath, chapter.filename);
+          if (request !== loadRequestRef.current) return;
           audio.src = blobUrl;
           audio.playbackRate = stateRef.current.playbackSpeed;
           loadedFileRef.current = chapter.filename;
@@ -127,18 +141,23 @@ export function useAudioPlayer(
             audio.addEventListener("error", onError);
             audio.load();
           });
-      } catch (err) {
-        const notFound = err instanceof FileNotFoundError;
-        const msg = notFound
-          ? "Audiobook files not found — folder may have been moved or deleted"
-          : err instanceof Error ? err.message : "Failed to load audio";
-        console.error("loadChapter failed:", msg);
-        setState((s) => ({ ...s, isLoading: false, error: msg, fileNotFound: notFound }));
-        loadedFileRef.current = null;
-        return;
-      }
+        } catch (err) {
+          if (request !== loadRequestRef.current) return;
+          loadingRef.current = false;
+          const notFound = err instanceof FileNotFoundError;
+          const msg = notFound
+            ? "Audiobook files not found — folder may have been moved or deleted"
+            : err instanceof Error ? err.message : "Failed to load audio";
+          console.error("loadChapter failed:", msg);
+          setState((s) => ({ ...s, isLoading: false, error: msg, fileNotFound: notFound }));
+          loadedFileRef.current = null;
+          return;
+        }
       }
 
+      if (request !== loadRequestRef.current) return;
+      loadingRef.current = false;
+      stateRef.current = { ...stateRef.current, currentChapterIndex: index, positionMs: seekMs };
       if (virtual) {
         audio.currentTime = (chapter.startMs! + seekMs) / 1000;
         const chapterDuration = chapter.endMs! - chapter.startMs!;
@@ -160,6 +179,11 @@ export function useAudioPlayer(
         }));
       }
 
+      if (publish) {
+        onPositionUpdate?.(index, seekMs);
+        onChapterChange?.(index);
+      }
+
       if (shouldPlayAfterLoad) {
         try {
           await audio.play();
@@ -169,34 +193,32 @@ export function useAudioPlayer(
         }
       }
     },
-    [chapters, folderPath, getOrCreateAudio]
+    [chapters, folderPath, getOrCreateAudio, onPositionUpdate, onChapterChange]
   );
 
   // Auto-advance: for non-virtual chapters use the "ended" event,
   // for virtual chapters use the position timer below.
   useEffect(() => {
-    const ch0 = chapters[0];
-    if (ch0 && isVirtualChapter(ch0)) return;
-
     const audio = getOrCreateAudio();
     const handleEnded = () => {
       const nextIndex = stateRef.current.currentChapterIndex + 1;
       if (nextIndex < chapters.length) {
         loadChapter(nextIndex, 0, true);
-        onChapterChange?.(nextIndex);
       } else {
+        capturePosition();
         setState((s) => ({ ...s, isPlaying: false }));
+        onPause?.();
       }
     };
     audio.addEventListener("ended", handleEnded);
     return () => audio.removeEventListener("ended", handleEnded);
-  }, [chapters, getOrCreateAudio, loadChapter, onChapterChange]);
+  }, [chapters, getOrCreateAudio, loadChapter, capturePosition, onPause]);
 
   // Position tracking timer (handles both modes + virtual chapter auto-advance)
   useEffect(() => {
     positionTimerRef.current = setInterval(() => {
       const audio = audioRef.current;
-      if (!audio || audio.paused) return;
+      if (!audio || audio.paused || loadingRef.current) return;
 
       const idx = stateRef.current.currentChapterIndex;
       const chapter = chapters[idx];
@@ -210,10 +232,11 @@ export function useAudioPlayer(
           const nextIndex = idx + 1;
           if (nextIndex < chapters.length) {
             loadChapter(nextIndex, 0);
-            onChapterChange?.(nextIndex);
           } else {
+            onPositionUpdate?.(idx, chapter.endMs! - chapter.startMs!);
             audio.pause();
             setState((s) => ({ ...s, isPlaying: false }));
+            onPause?.();
           }
           return;
         }
@@ -230,17 +253,18 @@ export function useAudioPlayer(
     return () => {
       if (positionTimerRef.current) clearInterval(positionTimerRef.current);
     };
-  }, [chapters, onPositionUpdate, loadChapter, onChapterChange]);
+  }, [chapters, onPositionUpdate, loadChapter, onPause]);
 
   // Load initial chapter
   useEffect(() => {
-    loadChapter(initialChapterIndex, initialPositionMs);
+    loadChapter(initialChapterIndex, initialPositionMs, false, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cleanup
   useEffect(() => {
     return () => {
+      loadRequestRef.current++;
       audioRef.current?.pause();
       audioRef.current = null;
       loadedFileRef.current = null;
@@ -257,9 +281,10 @@ export function useAudioPlayer(
 
     pause: useCallback(() => {
       audioRef.current?.pause();
+      capturePosition();
       setState((s) => ({ ...s, isPlaying: false }));
       onPause?.();
-    }, [onPause]),
+    }, [onPause, capturePosition]),
 
     togglePlayPause: useCallback(() => {
       if (audioRef.current?.paused) {
@@ -268,10 +293,11 @@ export function useAudioPlayer(
         onPlay?.();
       } else {
         audioRef.current?.pause();
+        capturePosition();
         setState((s) => ({ ...s, isPlaying: false }));
         onPause?.();
       }
-    }, [onPause, onPlay]),
+    }, [onPause, onPlay, capturePosition]),
 
     seekTo: useCallback((ms: number) => {
       const audio = audioRef.current;
@@ -285,7 +311,9 @@ export function useAudioPlayer(
         audio.currentTime = ms / 1000;
         setState((s) => ({ ...s, positionMs: ms }));
       }
-    }, [chapters]),
+      onPositionUpdate?.(stateRef.current.currentChapterIndex, ms);
+      onChapterChange?.(stateRef.current.currentChapterIndex);
+    }, [chapters, onPositionUpdate, onChapterChange]),
 
     seekBy: useCallback((deltaMs: number) => {
       const audio = audioRef.current;
@@ -300,6 +328,7 @@ export function useAudioPlayer(
         );
         audio.currentTime = newAbsoluteMs / 1000;
         setState((s) => ({ ...s, positionMs: newAbsoluteMs - chapter.startMs! }));
+        onPositionUpdate?.(stateRef.current.currentChapterIndex, newAbsoluteMs - chapter.startMs!);
       } else {
         const newTime = Math.max(
           0,
@@ -307,13 +336,14 @@ export function useAudioPlayer(
         );
         audio.currentTime = newTime;
         setState((s) => ({ ...s, positionMs: newTime * 1000 }));
+        onPositionUpdate?.(stateRef.current.currentChapterIndex, newTime * 1000);
       }
-    }, [chapters]),
+      onChapterChange?.(stateRef.current.currentChapterIndex);
+    }, [chapters, onPositionUpdate, onChapterChange]),
 
     skipToChapter: useCallback(
       (index: number, seekMs?: number) => {
         loadChapter(index, seekMs ?? 0);
-        onChapterChange?.(index);
       },
       [loadChapter, onChapterChange]
     ),
@@ -322,7 +352,6 @@ export function useAudioPlayer(
       const nextIdx = stateRef.current.currentChapterIndex + 1;
       if (nextIdx < chapters.length) {
         loadChapter(nextIdx, 0);
-        onChapterChange?.(nextIdx);
       }
     }, [chapters.length, loadChapter, onChapterChange]),
 
@@ -330,7 +359,6 @@ export function useAudioPlayer(
       const prevIdx = stateRef.current.currentChapterIndex - 1;
       if (prevIdx >= 0) {
         loadChapter(prevIdx, 0);
-        onChapterChange?.(prevIdx);
       } else if (stateRef.current.currentChapterIndex === 0) {
         loadChapter(0, 0);
       }

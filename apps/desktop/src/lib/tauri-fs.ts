@@ -105,11 +105,11 @@ export async function scanAudiobookFolder(
   };
 }
 
-function chapterStartSec(ch: { sampleOffset: number; start?: number; timescale?: number }, sampleRate: number): number {
-  if (ch.start !== undefined && ch.timescale !== undefined && ch.timescale > 0) {
-    return ch.start / ch.timescale;
+function chapterStartSec(ch: { sampleOffset?: number; start?: number; timeScale?: number }, sampleRate: number): number {
+  if (ch.start !== undefined && ch.timeScale !== undefined && ch.timeScale > 0) {
+    return ch.start / ch.timeScale;
   }
-  return ch.sampleOffset / (sampleRate || 44100);
+  return (ch.sampleOffset ?? 0) / (sampleRate || 44100);
 }
 
 export async function scanM4bFile(
@@ -122,7 +122,7 @@ export async function scanM4bFile(
   const metadata = await parseBuffer(data, {
     mimeType: "audio/mp4",
     size: fileStat.size,
-  });
+  }, { includeChapters: true });
 
   const totalDurationMs = (metadata.format.duration || 0) * 1000;
   const sampleRate = metadata.format.sampleRate || 44100;
@@ -132,7 +132,7 @@ export async function scanM4bFile(
 
   let chapters: ChapterInfo[];
 
-  const rawChapters = (metadata as { chapters?: Array<{ sampleOffset: number; title?: string; start?: number; timescale?: number }> }).chapters;
+  const rawChapters = metadata.format.chapters;
 
   if (rawChapters && rawChapters.length > 1) {
     chapters = rawChapters.map((ch, i) => {

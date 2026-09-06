@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useAudioPlayer } from "../hooks/useAudioPlayer";
-import { SyncEngine } from "@audiobook/shared";
+import { SyncEngine, fromSyncPosition, toSyncPosition } from "@audiobook/shared";
 import type { SyncState, SyncPushResult } from "@audiobook/shared";
 import type { LocalAudiobook } from "./AppShell";
 import { formatTime, formatTimeRemaining } from "../lib/utils";
@@ -10,6 +10,8 @@ import { extractCoverArt, pickAudiobookFolder, pickAudiobookFile, checkPathExist
 import { SyncIndicator } from "./SyncIndicator";
 import { ChaptersDrawer } from "./ChaptersDrawer";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface PlayerProps {
   book: LocalAudiobook;
@@ -83,11 +85,14 @@ export function Player({
   }, []);
 
   const convexId = book.convexId;
-  const syncIdentity = convexId || `local_${book.name}_${book.checksum}`;
+  const convexIdRef = useRef(convexId);
+  convexIdRef.current = convexId;
+  const syncIdentity = `local_${book.name}_${book.checksum}`;
   const scopedStorageAdapter = useMemo(
     () => ({
       getItem: (key: string) =>
-        localStorageAdapter.getItem(`${storageScope}:${key}`),
+        localStorageAdapter.getItem(`${storageScope}:${key}`).then((value) =>
+          value ?? (convexIdRef.current ? localStorageAdapter.getItem(`${storageScope}:audiobook_sync_${convexIdRef.current}`) : null)),
       setItem: (key: string, value: string) =>
         localStorageAdapter.setItem(`${storageScope}:${key}`, value),
       removeItem: (key: string) =>
@@ -95,10 +100,13 @@ export function Player({
     }),
     [storageScope]
   );
-  const remotePosition = useQuery(
+  const remoteWirePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip"
   );
+  const remotePosition = useMemo(() => remoteWirePosition && ({
+    ...remoteWirePosition, ...fromSyncPosition(book.chapters, remoteWirePosition),
+  }), [remoteWirePosition, book.chapters]);
 
   // Resolve Convex ID on mount if needed
   useEffect(() => {
@@ -117,19 +125,21 @@ export function Player({
     })();
   }, [convexId, book, getOrCreate, onConvexIdResolved]);
 
-  // Prefer remote position when it arrives — dismiss offline prompt if showing.
+  // Wait for both sources so an older server value cannot erase offline progress.
   useEffect(() => {
-    if (initialLoaded) return;
+    if (initialLoaded || !localInitResolved) return;
     if (remotePosition === undefined) return;
 
-    if (remotePosition) {
-      setInitialChapter(remotePosition.chapterIndex);
-      setInitialPosition(remotePosition.positionMs);
+    const position = syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (position) {
+      setInitialChapter(position.chapterIndex);
+      setInitialPosition(position.positionMs);
     }
+    initialLoadedRef.current = true;
     usedFallbackStartupRef.current = false;
     setShowOfflinePrompt(false);
     setInitialLoaded(true);
-  }, [remotePosition, initialLoaded]);
+  }, [remotePosition, initialLoaded, localInitResolved]);
 
   // If local state is ready first, only show the warning immediately when
   // the desktop is offline. Otherwise keep waiting for the remote sync.
@@ -176,9 +186,12 @@ export function Player({
     if (lateRemoteAppliedRef.current || playbackProgressedRef.current) return;
 
     lateRemoteAppliedRef.current = true;
-    setInitialChapter(remotePosition.chapterIndex);
-    setInitialPosition(remotePosition.positionMs);
-    seekToRef.current?.(remotePosition.chapterIndex, remotePosition.positionMs);
+    const position = syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (position) {
+      setInitialChapter(position.chapterIndex);
+      setInitialPosition(position.positionMs);
+      seekToRef.current?.(position.chapterIndex, position.positionMs);
+    }
   }, [initialLoaded, remotePosition]);
 
   // Initialize sync engine — works with or without a Convex ID.
@@ -191,16 +204,17 @@ export function Player({
       positionMs: number;
       updatedAt: number;
     }): Promise<SyncPushResult> => {
-      if (!convexId) throw new Error("No Convex ID yet");
+      if (!convexIdRef.current) throw new Error("No Convex ID yet");
       const result = await updatePosition({
-        audiobookId: position.audiobookId as Id<"audiobooks">,
-        chapterIndex: position.chapterIndex,
-        positionMs: position.positionMs,
+        audiobookId: convexIdRef.current as Id<"audiobooks">,
+        ...toSyncPosition(book.chapters, position),
         clientUpdatedAt: position.updatedAt,
       });
       return {
         accepted: result.accepted,
-        serverPosition: result.serverPosition,
+        serverPosition: result.serverPosition && {
+          ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
+        },
       };
     };
 
@@ -218,6 +232,7 @@ export function Player({
       onRemoteNewer,
     );
     syncEngineRef.current = engine;
+    setLocalInitResolved(false);
 
     const unsub = engine.subscribe(setSyncState);
 
@@ -239,10 +254,41 @@ export function Player({
     return () => {
       cancelled = true;
       unsub();
+      void engine.onClose();
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition]);
+  }, [scopedStorageAdapter, syncIdentity, updatePosition]);
+
+  useEffect(() => {
+    const background = () => {
+      if (document.visibilityState === "hidden") void syncEngineRef.current?.onBackground();
+    };
+    const reconnect = () => { void syncEngineRef.current?.onReconnect(); };
+    const unload = () => { void syncEngineRef.current?.onClose(); };
+    document.addEventListener("visibilitychange", background);
+    window.addEventListener("online", reconnect);
+    window.addEventListener("beforeunload", unload);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    if (isTauri()) {
+      void getCurrentWindow().onCloseRequested(async (event) => {
+        event.preventDefault();
+        await Promise.race([
+          syncEngineRef.current?.onClose(),
+          new Promise((resolve) => setTimeout(resolve, 1500)),
+        ]);
+        await getCurrentWindow().destroy();
+      }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+      document.removeEventListener("visibilitychange", background);
+      window.removeEventListener("online", reconnect);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, []);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {

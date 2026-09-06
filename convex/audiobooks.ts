@@ -14,6 +14,8 @@ import {
   checkDeviceCap,
 } from "./lib/limits";
 
+import { resolveCanonicalAudiobookId, getLinkedGroup, getLatestGroupPosition } from "./lib/audiobookLinks";
+
 const chapterValidator = v.object({
   index: v.number(),
   filename: v.string(),
@@ -219,15 +221,6 @@ async function findOwnedLinksByCanonicalId(
   return links.filter((link) => matchesUserId(link.userId, identity));
 }
 
-async function resolveCanonicalAudiobookId(
-  ctx: QueryCtx | MutationCtx,
-  identity: ResolvedAuthIdentity,
-  audiobookId: Id<"audiobooks">,
-): Promise<Id<"audiobooks">> {
-  const ownedLink = (await findOwnedLinksByLinkedId(ctx, identity, audiobookId))[0];
-  return ownedLink ? ownedLink.canonicalId : audiobookId;
-}
-
 export const getOrCreate = mutation({
   args: {
     name: v.string(),
@@ -366,21 +359,34 @@ export const link = mutation({
     const linked = await ctx.db.get(args.linkedId);
     await assertOwnership(ctx, linked);
 
-    const existing = (await findOwnedLinksByLinkedId(ctx, identity, args.linkedId))[0];
-
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        canonicalId: args.canonicalId,
-        userId,
-      });
-      return existing._id;
+    if (!canonical || !linked) throw new Error("Audiobook not found");
+    if (args.canonicalId === args.linkedId) throw new Error("Cannot link an audiobook to itself");
+    const root = await resolveCanonicalAudiobookId(ctx, identity, args.canonicalId);
+    const members = new Set([
+      ...await getLinkedGroup(ctx, identity, root),
+      ...await getLinkedGroup(ctx, identity, args.linkedId),
+    ]);
+    let result: Id<"audiobookLinks"> | undefined;
+    for (const member of members) {
+      const links = await findOwnedLinksByLinkedId(ctx, identity, member);
+      if (member === root) {
+        for (const row of links) await ctx.db.delete(row._id);
+        continue;
+      }
+      const existing = links[0];
+      let id: Id<"audiobookLinks">;
+      if (existing) {
+        await ctx.db.patch(existing._id, { canonicalId: root, userId });
+        id = existing._id;
+        for (const duplicate of links.slice(1)) await ctx.db.delete(duplicate._id);
+      } else {
+        id = await ctx.db.insert("audiobookLinks", { canonicalId: root, linkedId: member, userId });
+      }
+      result ??= id;
+      if (member === args.linkedId) result = id;
     }
-
-    return await ctx.db.insert("audiobookLinks", {
-      canonicalId: args.canonicalId,
-      linkedId: args.linkedId,
-      userId,
-    });
+    if (!result) throw new Error("Unable to link audiobooks");
+    return result;
   },
 });
 
@@ -400,27 +406,36 @@ export const unlink = mutation({
     const peer = await ctx.db.get(args.peerId);
     await assertOwnership(ctx, peer);
 
-    const asLinked = await findOwnedLinksByLinkedId(ctx, identity, args.peerId);
-    for (const row of asLinked) {
-      if (row.canonicalId === args.audiobookId) {
-        await ctx.db.delete(row._id);
-        return true;
+    if (!book || !peer) throw new Error("Audiobook not found");
+    const group = await getLinkedGroup(ctx, identity, args.audiobookId);
+    if (args.peerId === args.audiobookId || !group.includes(args.peerId)) return false;
+    const root = group[0];
+    const detachedId = args.peerId === root ? args.audiobookId : args.peerId;
+    const latest = await getLatestGroupPosition(ctx, identity, args.audiobookId);
+    // Preserve the shared resume point on the detached copy as well.
+    if (latest) {
+      for await (const position of ctx.db.query("positions")
+        .withIndex("by_audiobook", (q) => q.eq("audiobookId", detachedId))) {
+        if (matchesUserId(position.userId, identity)) await ctx.db.delete(position._id);
+      }
+      await ctx.db.insert("positions", {
+        audiobookId: detachedId, userId, chapterIndex: latest.chapterIndex,
+        positionMs: latest.positionMs, updatedAt: latest.updatedAt,
+      });
+      if (latest.audiobookId === detachedId) {
+        await ctx.db.insert("positions", {
+          audiobookId: root, userId, chapterIndex: latest.chapterIndex,
+          positionMs: latest.positionMs, updatedAt: latest.updatedAt,
+        });
       }
     }
-
-    const asCanonical = await findOwnedLinksByCanonicalId(
-      ctx,
-      identity,
-      args.peerId,
-    );
-    for (const row of asCanonical) {
-      if (row.linkedId === args.audiobookId) {
-        await ctx.db.delete(row._id);
-        return true;
-      }
+    for (const row of await findOwnedLinksByLinkedId(ctx, identity, detachedId)) {
+      await ctx.db.delete(row._id);
     }
-
-    return false;
+    for (const row of await findOwnedLinksByCanonicalId(ctx, identity, detachedId)) {
+      await ctx.db.patch(row._id, { canonicalId: root, userId });
+    }
+    return true;
   },
 });
 
@@ -433,21 +448,8 @@ export const getLinked = query({
     const book = await ctx.db.get(args.audiobookId);
     await assertOwnership(ctx, book);
 
-    const asCanonical = await findOwnedLinksByCanonicalId(
-      ctx,
-      identity,
-      args.audiobookId,
-    );
-
-    const asLinked = await findOwnedLinksByLinkedId(
-      ctx,
-      identity,
-      args.audiobookId,
-    );
-
-    const relatedIds: Id<"audiobooks">[] = [];
-    for (const l of asCanonical) relatedIds.push(l.linkedId);
-    for (const l of asLinked) relatedIds.push(l.canonicalId);
+    const relatedIds = (await getLinkedGroup(ctx, identity, args.audiobookId))
+      .filter((id) => id !== args.audiobookId);
 
     const seen = new Set<string>();
     const results = [];

@@ -22,7 +22,7 @@ position across devices using Convex. Its disined to be lightweight and low cost
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 24+
 - pnpm (`npm install -g pnpm`)
 - A Convex account
 - Rust toolchain (for Tauri desktop)

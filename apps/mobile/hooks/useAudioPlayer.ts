@@ -9,6 +9,8 @@ import TrackPlayer, {
   AppKilledPlaybackBehavior,
 } from "react-native-track-player";
 import type { ChapterInfo } from "@audiobook/shared";
+import { fromSyncPosition, toSyncPosition } from "@audiobook/shared";
+import { capturePlaybackPosition, flushPlaybackSession, getPlaybackSession, seekPlaybackSession, syncPlaybackState } from "../lib/playbackSession";
 
 export interface MobilePlayerState {
   isPlaying: boolean;
@@ -32,47 +34,30 @@ export interface MobilePlayerControls {
   setSpeed: (speed: number) => Promise<void>;
 }
 
-let isSetup = false;
-
-const FULL_NOTIFICATION_CAPABILITIES = [
-  Capability.Play,
-  Capability.Pause,
-  Capability.SkipToNext,
-  Capability.SkipToPrevious,
-  Capability.JumpForward,
-  Capability.JumpBackward,
-  Capability.SeekTo,
-];
+let setup: Promise<void> | undefined;
 
 async function setupPlayer() {
-  if (isSetup) return;
-  try {
-    await TrackPlayer.setupPlayer();
+  setup ??= (async () => {
+    try {
+      await TrackPlayer.setupPlayer();
+    } catch (error) {
+      if ((error as { code?: string }).code !== "player_already_initialized") throw error;
+    }
     await TrackPlayer.updateOptions({
-      android: {
-        appKilledPlaybackBehavior:
-          AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
-      },
-      capabilities: FULL_NOTIFICATION_CAPABILITIES,
-      compactCapabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.SkipToNext,
-      ],
+      android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification },
+      capabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext, Capability.SkipToPrevious,
+        Capability.JumpForward, Capability.JumpBackward, Capability.SeekTo],
+      compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
       forwardJumpInterval: 30,
       backwardJumpInterval: 30,
+      progressUpdateEventInterval: 2,
     });
-    isSetup = true;
-  } catch {
-    isSetup = true;
-  }
-}
-
-function isVirtualChapter(ch: ChapterInfo): boolean {
-  return ch.startMs !== undefined && ch.endMs !== undefined;
+  })().catch((error: unknown) => { setup = undefined; throw error; });
+  await setup;
 }
 
 interface UseAudioPlayerOptions {
+  sessionKey: string;
   fileUris: string[];
   chapters: ChapterInfo[];
   initialChapterIndex?: number;
@@ -83,297 +68,122 @@ interface UseAudioPlayerOptions {
   onPlay?: () => void;
 }
 
-export function useMobileAudioPlayer(
-  options: UseAudioPlayerOptions
-): [MobilePlayerState, MobilePlayerControls] {
-  const {
-    fileUris,
-    chapters,
-    initialChapterIndex = 0,
-    initialPositionMs = 0,
-    onPositionUpdate,
-    onChapterChange,
-    onPause,
-    onPlay,
-  } = options;
-
-  const virtual = chapters.length > 0 && isVirtualChapter(chapters[0]);
-
+export function useMobileAudioPlayer(options: UseAudioPlayerOptions): [MobilePlayerState, MobilePlayerControls] {
+  const { sessionKey, fileUris, chapters, initialChapterIndex = 0, initialPositionMs = 0 } = options;
+  const callbacks = useRef(options);
+  callbacks.current = options;
+  const virtual = chapters[0]?.startMs !== undefined && chapters[0]?.endMs !== undefined;
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(initialChapterIndex);
+  const [speed, setSpeed] = useState(1);
   const playbackState = usePlaybackState();
   const progress = useProgress(250);
-  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
-  const positionCallbackRef = useRef(onPositionUpdate);
-  positionCallbackRef.current = onPositionUpdate;
-  const chapterChangeRef = useRef(onChapterChange);
-  chapterChangeRef.current = onChapterChange;
-
-  const [speed, setSpeedState] = useState(1.0);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [virtualChapterIdx, setVirtualChapterIdx] = useState(initialChapterIndex);
-  const virtualIdxRef = useRef(virtualChapterIdx);
-  virtualIdxRef.current = virtualChapterIdx;
+  const isPlaying = playbackState.state === State.Playing;
+  const chapterIndex = virtual
+    ? fromSyncPosition(chapters, { chapterIndex: 0, positionMs: progress.position * 1000 }).chapterIndex
+    : currentTrackIndex;
+  const indexRef = useRef(chapterIndex);
+  indexRef.current = chapterIndex;
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      try {
-        await setupPlayer();
+    void (async () => {
+      const session = getPlaybackSession(sessionKey);
+      if (!session) throw new Error("Playback session is unavailable");
+      await setupPlayer();
+      if (!mounted || getPlaybackSession() !== session) return;
+      if (!session.ready) {
         await TrackPlayer.reset();
-
-        if (virtual) {
-          const track = {
-            id: "m4b-single",
-            url: fileUris[0],
-            title: chapters[0]?.title || "Audiobook",
-            artist: "Audiobook",
-          };
-          await TrackPlayer.add([track]);
-
-          const ch = chapters[initialChapterIndex];
-          const absoluteMs = (ch?.startMs || 0) + initialPositionMs;
-          await TrackPlayer.seekTo(absoluteMs / 1000);
-        } else {
-          const tracks = fileUris.map((uri, i) => ({
-            id: `chapter-${i}`,
-            url: uri,
-            title:
-              chapters[i]?.title ||
-              chapters[i]?.filename?.replace(/\.[^/.]+$/, "") ||
-              `Chapter ${i + 1}`,
-            artist: "Audiobook",
-          }));
-          await TrackPlayer.add(tracks);
-
-          if (initialChapterIndex > 0) {
-            await TrackPlayer.skip(initialChapterIndex);
-          }
-          if (initialPositionMs > 0) {
-            await TrackPlayer.seekTo(initialPositionMs / 1000);
-          }
-
-          const currentTrack = await TrackPlayer.getCurrentTrack();
-          if (mounted && currentTrack !== null) {
-            setCurrentTrackIndex(currentTrack);
-          }
-        }
-
-        if (mounted) setReady(true);
-      } catch (err) {
-        if (mounted) {
-          const msg = err instanceof Error ? err.message : "Failed to load audio files";
-          setLoadError(msg);
-          setReady(true);
-        }
+        const tracks = (virtual ? fileUris.slice(0, 1) : fileUris).map((url, i) => ({
+          id: sessionKey + ":" + i, url,
+          title: chapters[i]?.title || chapters[i]?.filename || "Audiobook",
+          artist: "Audiobook",
+        }));
+        await TrackPlayer.add(tracks);
+        const position = virtual
+          ? toSyncPosition(chapters, { chapterIndex: initialChapterIndex, positionMs: initialPositionMs })
+          : { chapterIndex: initialChapterIndex, positionMs: initialPositionMs };
+        await TrackPlayer.skip(position.chapterIndex, position.positionMs / 1000);
+        session.ready = true;
       }
-    })();
-
+      const track = await TrackPlayer.getActiveTrackIndex();
+      if (mounted) {
+        setCurrentTrackIndex(track ?? 0);
+        setSpeed(await TrackPlayer.getRate());
+        setReady(true);
+      }
+    })().catch((cause: unknown) => {
+      if (mounted) setError(cause instanceof Error ? cause.message : "Failed to load audio");
+    });
     return () => {
       mounted = false;
+      if (getPlaybackSession(sessionKey)?.ready) void flushPlaybackSession();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionKey]);
 
-  useTrackPlayerEvents([Event.PlaybackTrackChanged], (event) => {
-    if (virtual) return;
-    if (typeof event.nextTrack !== "number" || event.nextTrack < 0) return;
-    setCurrentTrackIndex(event.nextTrack);
-    chapterChangeRef.current?.(event.nextTrack);
+  useTrackPlayerEvents([Event.PlaybackActiveTrackChanged], (event) => {
+    if (typeof event.index === "number") setCurrentTrackIndex(event.index);
   });
 
-  // Position update + virtual chapter boundary detection
   useEffect(() => {
-    if (!ready) return;
+    if (ready && isPlaying) callbacks.current.onPlay?.();
+  }, [ready, isPlaying]);
 
-    if (virtual) {
-      const absoluteMs = progress.position * 1000;
-      const ch = chapters[virtualIdxRef.current];
-      if (!ch) return;
+  const publishSeek = useCallback(async () => {
+    const session = getPlaybackSession(sessionKey);
+    if (!session?.ready) return;
+    await capturePlaybackPosition(session);
+    const position = session.engine.getState().pending;
+    if (position) callbacks.current.onPositionUpdate?.(position.chapterIndex, position.positionMs);
+    void session.engine.onChapterChange();
+  }, [sessionKey]);
 
-      const posMs = Math.max(0, absoluteMs - (ch.startMs || 0));
+  const seekTo = useCallback(async (ms: number) => {
+    await seekPlaybackSession(indexRef.current, Math.max(0, ms));
+    await publishSeek();
+  }, [publishSeek]);
 
-      if (absoluteMs >= (ch.endMs || Infinity)) {
-        const nextIdx = virtualIdxRef.current + 1;
-        if (nextIdx < chapters.length) {
-          setVirtualChapterIdx(nextIdx);
-          virtualIdxRef.current = nextIdx;
-          chapterChangeRef.current?.(nextIdx);
-          const nextCh = chapters[nextIdx];
-          TrackPlayer.seekTo((nextCh.startMs || 0) / 1000);
-        } else {
-          TrackPlayer.pause();
-        }
-        return;
-      }
+  const skipToChapter = useCallback(async (index: number, ms = 0) => {
+    if (index < 0 || index >= chapters.length) return;
+    await seekPlaybackSession(index, ms);
+    await publishSeek();
+  }, [chapters.length, publishSeek]);
 
-      positionCallbackRef.current?.(virtualIdxRef.current, posMs);
-    } else {
-      positionCallbackRef.current?.(currentTrackIndex, progress.position * 1000);
-    }
-  }, [progress.position, ready, virtual, chapters, currentTrackIndex]);
-
-  const currentChapterIndex = virtual
-    ? virtualChapterIdx
-    : currentTrackIndex;
-
-  const playbackStatus: State | undefined =
-    typeof playbackState === "object" &&
-    playbackState !== null &&
-    "state" in playbackState
-      ? (playbackState as { state: State | undefined }).state
-      : (playbackState as State);
-  const isPlaying =
-    playbackStatus === State.Playing ||
-    playbackStatus === State.Buffering;
-
-  let positionMs: number;
-  let durationMs: number;
-  if (virtual) {
-    const ch = chapters[virtualChapterIdx];
-    const absoluteMs = progress.position * 1000;
-    positionMs = ch ? Math.max(0, absoluteMs - (ch.startMs || 0)) : 0;
-    durationMs = ch ? (ch.endMs || 0) - (ch.startMs || 0) : 0;
-  } else {
-    positionMs = progress.position * 1000;
-    durationMs = progress.duration * 1000;
-  }
-
-  const playbackError = null;
+  const play = useCallback(async () => {
+    await TrackPlayer.play();
+    void syncPlaybackState(State.Playing);
+  }, []);
+  const pause = useCallback(async () => {
+    await TrackPlayer.pause();
+    void syncPlaybackState(State.Paused);
+  }, []);
 
   const state: MobilePlayerState = {
     isPlaying,
-    currentChapterIndex,
-    positionMs,
-    durationMs,
+    currentChapterIndex: chapterIndex,
+    positionMs: virtual ? Math.max(0, progress.position * 1000 - (chapters[chapterIndex]?.startMs ?? 0)) : progress.position * 1000,
+    durationMs: virtual ? (chapters[chapterIndex]?.endMs ?? 0) - (chapters[chapterIndex]?.startMs ?? 0) : progress.duration * 1000,
     playbackSpeed: speed,
-    isLoading:
-      !ready ||
-      playbackStatus === State.Buffering ||
-      playbackStatus === State.Connecting,
-    error: loadError || playbackError,
+    isLoading: !error && (!ready || playbackState.state === State.Buffering || playbackState.state === State.Loading),
+    error,
   };
 
-  const controls: MobilePlayerControls = {
-    play: useCallback(async () => {
-      await TrackPlayer.play();
-      onPlay?.();
-    }, [onPlay]),
-
-    pause: useCallback(async () => {
-      await TrackPlayer.pause();
-      onPause?.();
-    }, [onPause]),
-
-    togglePlayPause: useCallback(async () => {
-      const st = await TrackPlayer.getState();
-      if (st === State.Playing) {
-        await TrackPlayer.pause();
-        onPause?.();
-      } else {
-        await TrackPlayer.play();
-        onPlay?.();
-      }
-    }, [onPause, onPlay]),
-
-    seekTo: useCallback(async (ms: number) => {
-      if (virtual) {
-        const ch = chapters[virtualIdxRef.current];
-        if (ch) {
-          await TrackPlayer.seekTo(((ch.startMs || 0) + ms) / 1000);
-        }
-      } else {
-        await TrackPlayer.seekTo(ms / 1000);
-      }
-    }, [virtual, chapters]),
-
-    seekBy: useCallback(async (deltaMs: number) => {
-      const pos = await TrackPlayer.getPosition();
-      if (virtual) {
-        const ch = chapters[virtualIdxRef.current];
-        if (ch) {
-          const newMs = Math.max(
-            ch.startMs || 0,
-            Math.min(ch.endMs || Infinity, pos * 1000 + deltaMs)
-          );
-          await TrackPlayer.seekTo(newMs / 1000);
-        }
-      } else {
-        await TrackPlayer.seekTo(Math.max(0, pos + deltaMs / 1000));
-      }
-    }, [virtual, chapters]),
-
-    skipToChapter: useCallback(
-      async (index: number, seekMs?: number) => {
-        if (virtual) {
-          const ch = chapters[index];
-          if (ch) {
-            setVirtualChapterIdx(index);
-            virtualIdxRef.current = index;
-            const absoluteMs = (ch.startMs || 0) + (seekMs || 0);
-            await TrackPlayer.seekTo(absoluteMs / 1000);
-            onChapterChange?.(index);
-          }
-        } else {
-          await TrackPlayer.skip(index);
-          if (seekMs && seekMs > 0) {
-            await TrackPlayer.seekTo(seekMs / 1000);
-          }
-        }
-      },
-      [virtual, chapters, onChapterChange]
-    ),
-
-    nextChapter: useCallback(async () => {
-      if (virtual) {
-        const nextIdx = virtualIdxRef.current + 1;
-        if (nextIdx < chapters.length) {
-          setVirtualChapterIdx(nextIdx);
-          virtualIdxRef.current = nextIdx;
-          const ch = chapters[nextIdx];
-          await TrackPlayer.seekTo((ch.startMs || 0) / 1000);
-          onChapterChange?.(nextIdx);
-        }
-      } else {
-        try {
-          await TrackPlayer.skipToNext();
-        } catch {
-          // No next track
-        }
-      }
-    }, [virtual, chapters, onChapterChange]),
-
-    prevChapter: useCallback(async () => {
-      if (virtual) {
-        const prevIdx = virtualIdxRef.current - 1;
-        if (prevIdx >= 0) {
-          setVirtualChapterIdx(prevIdx);
-          virtualIdxRef.current = prevIdx;
-          const ch = chapters[prevIdx];
-          await TrackPlayer.seekTo((ch.startMs || 0) / 1000);
-          onChapterChange?.(prevIdx);
-        } else if (virtualIdxRef.current === 0) {
-          const firstChapter = chapters[0];
-          await TrackPlayer.seekTo((firstChapter?.startMs || 0) / 1000);
-        }
-      } else {
-        const currentTrack = await TrackPlayer.getCurrentTrack();
-        if (currentTrack === 0) {
-          await TrackPlayer.seekTo(0);
-          return;
-        }
-        try {
-          await TrackPlayer.skipToPrevious();
-        } catch {
-          // No previous track
-        }
-      }
-    }, [virtual, chapters, onChapterChange]),
-
-    setSpeed: useCallback(async (s: number) => {
-      await TrackPlayer.setRate(s);
-      setSpeedState(s);
-    }, []),
-  };
-
-  return [state, controls];
+  return [state, {
+    play, pause, seekTo, skipToChapter,
+    togglePlayPause: async () => {
+      const playback = await TrackPlayer.getPlaybackState();
+      if (playback.state === State.Playing) await pause(); else await play();
+    },
+    seekBy: async (deltaMs) => {
+      const position = await TrackPlayer.getPosition();
+      const chapter = chapters[indexRef.current];
+      const offset = virtual ? chapter?.startMs ?? 0 : 0;
+      const duration = virtual ? (chapter?.endMs ?? Infinity) - offset : Infinity;
+      await seekTo(Math.min(duration, Math.max(0, position * 1000 - offset + deltaMs)));
+    },
+    nextChapter: async () => { await skipToChapter(indexRef.current + 1); },
+    prevChapter: async () => { await skipToChapter(Math.max(0, indexRef.current - 1)); },
+    setSpeed: async (value) => { await TrackPlayer.setRate(value); setSpeed(value); },
+  }];
 }

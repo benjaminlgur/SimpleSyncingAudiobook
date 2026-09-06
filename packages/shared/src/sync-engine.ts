@@ -28,6 +28,10 @@ export class SyncEngine {
   private localPersistTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: Set<(state: SyncState) => void> = new Set();
   private isPlaying = false;
+  private initialization: Promise<PlaybackPosition | null> | null = null;
+  private persistence: Promise<void> = Promise.resolve();
+  private syncing: Promise<void> | null = null;
+  private syncRequested = false;
 
   constructor(
     audiobookId: string,
@@ -51,6 +55,10 @@ export class SyncEngine {
     return { ...this.state };
   }
 
+  setPushFn(pushFn: SyncPushFn) {
+    this.pushFn = pushFn;
+  }
+
   private notify() {
     for (const listener of this.listeners) {
       listener({ ...this.state });
@@ -67,7 +75,12 @@ export class SyncEngine {
     this.notify();
   }
 
-  async initialize(): Promise<PlaybackPosition | null> {
+  initialize(): Promise<PlaybackPosition | null> {
+    this.initialization ??= this.loadLocalPosition();
+    return this.initialization;
+  }
+
+  private async loadLocalPosition(): Promise<PlaybackPosition | null> {
     const stored = await this.storage.getItem(
       STORAGE_KEY_PREFIX + this.audiobookId
     );
@@ -75,14 +88,25 @@ export class SyncEngine {
       try {
         const position = JSON.parse(stored) as PlaybackPosition;
         position.audiobookId = this.audiobookId;
-        if (!position.updatedAt) position.updatedAt = Date.now();
-        this.state.pending = position;
-        return position;
+        if (!Number.isFinite(position.updatedAt)) position.updatedAt = 0;
+        if (!Number.isInteger(position.chapterIndex) || position.chapterIndex < 0 ||
+            !Number.isFinite(position.positionMs) || position.positionMs < 0) return null;
+        this.reconcilePosition(position);
+        return this.state.pending;
       } catch {
         // corrupted data
       }
     }
     return null;
+  }
+
+  /** Select a resume position without making old progress look newly edited. */
+  reconcilePosition(remote: Omit<PlaybackPosition, "audiobookId"> | null): PlaybackPosition | null {
+    if (remote && (!this.state.pending || remote.updatedAt > this.state.pending.updatedAt)) {
+      this.state.pending = { ...remote, audiobookId: this.audiobookId };
+      void this.persistLocally();
+    }
+    return this.state.pending;
   }
 
   startTimers(playing: boolean) {
@@ -112,6 +136,8 @@ export class SyncEngine {
   }
 
   updatePosition(chapterIndex: number, positionMs: number) {
+    if (this.state.pending?.chapterIndex === chapterIndex &&
+        this.state.pending.positionMs === positionMs) return;
     this.state.pending = {
       audiobookId: this.audiobookId,
       chapterIndex,
@@ -145,6 +171,7 @@ export class SyncEngine {
   }
 
   async onClose() {
+    this.isPlaying = false;
     this.stopTimers();
     await this.persistLocally();
     await this.syncToRemote();
@@ -155,33 +182,50 @@ export class SyncEngine {
   }
 
   async manualSync() {
+    await this.persistLocally();
     await this.syncToRemote();
   }
 
-  private async persistLocally() {
-    if (!this.state.pending) return;
-    await this.storage.setItem(
-      STORAGE_KEY_PREFIX + this.audiobookId,
-      JSON.stringify(this.state.pending)
-    );
+  private persistLocally(): Promise<void> {
+    if (!this.state.pending) return Promise.resolve();
+    const value = JSON.stringify(this.state.pending);
+    this.persistence = this.persistence.then(() => this.storage.setItem(
+      STORAGE_KEY_PREFIX + this.audiobookId, value,
+    )).catch((error: unknown) => {
+      this.setStatus("error", error instanceof Error ? error.message : "Local save failed");
+    });
+    return this.persistence;
   }
 
-  private async syncToRemote() {
-    if (!this.state.pending) return;
+  private syncToRemote(): Promise<void> {
+    this.syncRequested = true;
+    if (this.syncing) return this.syncing;
+    this.syncing = this.flushRequestedPositions().finally(() => { this.syncing = null; });
+    return this.syncing;
+  }
+
+  private async flushRequestedPositions() {
+    while (this.syncRequested) {
+      this.syncRequested = false;
+      await this.pushPosition();
+    }
+  }
+
+  private async pushPosition() {
+    const sent = this.state.pending;
+    if (!sent) return;
 
     this.setStatus("syncing");
 
     try {
-      const result = await this.pushFn(this.state.pending);
+      const result = await this.pushFn(sent);
 
       if (result.accepted) {
         this.setStatus("synced");
-        await this.storage.removeItem(STORAGE_KEY_PREFIX + this.audiobookId);
+        await this.persistLocally();
       } else if (result.serverPosition) {
         this.setStatus("synced");
-        await this.storage.removeItem(STORAGE_KEY_PREFIX + this.audiobookId);
-
-        if (!this.isPlaying) {
+        if (!this.isPlaying && this.state.pending === sent) {
           this.state.pending = {
             audiobookId: this.audiobookId,
             chapterIndex: result.serverPosition.chapterIndex,
@@ -193,6 +237,7 @@ export class SyncEngine {
             positionMs: result.serverPosition.positionMs,
           });
         }
+        await this.persistLocally();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Sync failed";
