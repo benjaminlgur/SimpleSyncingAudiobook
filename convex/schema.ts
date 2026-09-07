@@ -8,6 +8,7 @@ export default defineSchema({
   audiobooks: defineTable({
     name: v.string(),
     checksum: v.string(),
+    recordingId: v.optional(v.id("audiobooks")),
     chapters: v.array(
       v.object({
         index: v.number(),
@@ -22,6 +23,7 @@ export default defineSchema({
   })
     .index("by_name", ["name"])
     .index("by_checksum", ["checksum"])
+    .index("by_userId_and_checksum", ["userId", "checksum"])
     .index("by_name_checksum", ["name", "checksum"])
     .index("by_user", ["userId"])
     .index("by_user_and_name", ["userId", "name"])
@@ -32,10 +34,23 @@ export default defineSchema({
     chapterIndex: v.number(),
     positionMs: v.number(),
     updatedAt: v.number(),
+    revision: v.optional(v.number()),
+    operationId: v.optional(v.string()),
+    sessionId: v.optional(v.string()),
     userId: v.optional(v.string()),
   })
     .index("by_audiobook", ["audiobookId"])
     .index("by_user_and_audiobook", ["userId", "audiobookId"]),
+
+  positionHistory: defineTable({
+    audiobookId: v.id("audiobooks"),
+    userId: v.string(),
+    chapterIndex: v.number(),
+    positionMs: v.number(),
+    updatedAt: v.number(),
+    revision: v.number(),
+    sessionId: v.optional(v.string()),
+  }).index("by_userId_and_audiobookId", ["userId", "audiobookId"]),
 
   audiobookLinks: defineTable({
     canonicalId: v.id("audiobooks"),

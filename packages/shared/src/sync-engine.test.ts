@@ -85,3 +85,63 @@ test("a rejected stale request cannot overwrite a seek made while it was in flig
   await first;
   expect(engine.getState().pending).toMatchObject({ chapterIndex: 4, positionMs: 8000 });
 });
+
+test("acknowledged revisions stay durable and are not pushed again on restart", async () => {
+  const push = vi.fn(async (): Promise<SyncPushResult> => ({ accepted: true, revision: 1, serverPosition: null }));
+  const engine = create(push);
+  engine.updatePosition(0, 1000);
+  await engine.manualSync();
+  const restored = create(push);
+  expect(await restored.initialize()).toMatchObject({ revision: 1, dirty: false, positionMs: 1000 });
+  await restored.manualSync();
+  expect(push).toHaveBeenCalledTimes(1);
+});
+
+test("offline forks survive restart and require an explicit choice", async () => {
+  const engine = create(vi.fn(async (): Promise<SyncPushResult> => ({ accepted: false, serverPosition: { ...position(2000, 1), revision: 2 } })));
+  engine.reconcilePosition({ ...position(500, 1), revision: 1 });
+  engine.updatePosition(0, 8000);
+  await engine.manualSync();
+  const push = vi.fn(async (): Promise<SyncPushResult> => ({ accepted: true, revision: 3, serverPosition: null }));
+  const restored = create(push);
+  await restored.initialize();
+  expect(restored.getState()).toMatchObject({ pending: { positionMs: 8000 }, conflict: { positionMs: 2000, revision: 2 } });
+  await restored.manualSync();
+  expect(push).not.toHaveBeenCalled();
+  await restored.resolveConflict("local");
+  expect(push.mock.calls).toHaveLength(1);
+  expect(restored.getState()).toMatchObject({ pending: { positionMs: 8000, revision: 3, dirty: false }, conflict: null });
+});
+
+test("choosing the other device does not write local progress over it", async () => {
+  const push = vi.fn(async (): Promise<SyncPushResult> => accepted);
+  const engine = create(push);
+  engine.updatePosition(0, 8000);
+  engine.reconcilePosition({ ...position(2000, 1), revision: 2 });
+  await engine.resolveConflict("remote");
+  expect(engine.getState().pending).toMatchObject({ revision: 2, positionMs: 2000, dirty: false });
+  expect(push).not.toHaveBeenCalled();
+});
+
+test("a subscription acknowledging our in-flight write is not a conflict", async () => {
+  let finish!: (result: SyncPushResult) => void;
+  const engine = create(vi.fn(() => new Promise<SyncPushResult>((resolve) => { finish = resolve; })));
+  engine.updatePosition(0, 1000);
+  const sent = engine.getState().pending!;
+  const syncing = engine.manualSync();
+  await vi.advanceTimersByTimeAsync(0);
+  engine.updatePosition(0, 2000);
+  engine.reconcilePosition({ ...sent, revision: 1 });
+  finish({ accepted: true, revision: 1, serverPosition: null });
+  await syncing;
+  expect(engine.getState().conflict).toBeFalsy();
+  expect(engine.getState().pending).toMatchObject({ positionMs: 2000, revision: 1, dirty: true });
+});
+
+test("invalid player samples cannot corrupt saved progress", () => {
+  const engine = create();
+  engine.updatePosition(0, 1000);
+  engine.updatePosition(-1, NaN);
+  engine.updatePosition(0, Infinity);
+  expect(engine.getState().pending?.positionMs).toBe(1000);
+});

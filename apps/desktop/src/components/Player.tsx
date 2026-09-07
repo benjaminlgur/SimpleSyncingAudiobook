@@ -1,3 +1,4 @@
+import type { PlaybackPosition } from "@audiobook/shared";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
@@ -128,7 +129,11 @@ export function Player({
   // Wait for both sources so an older server value cannot erase offline progress.
   useEffect(() => {
     if (initialLoaded || !localInitResolved) return;
-    if (remotePosition === undefined) return;
+    if (remotePosition === undefined) {
+      usedFallbackStartupRef.current = true;
+      setInitialLoaded(true);
+      return;
+    }
 
     const position = syncEngineRef.current?.reconcilePosition(remotePosition);
     if (position) {
@@ -194,24 +199,27 @@ export function Player({
     }
   }, [initialLoaded, remotePosition]);
 
+  useEffect(() => {
+    if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
+  }, [localInitResolved, remotePosition]);
+
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
     let cancelled = false;
 
-    const pushFn = async (position: {
-      audiobookId: string;
-      chapterIndex: number;
-      positionMs: number;
-      updatedAt: number;
-    }): Promise<SyncPushResult> => {
+    const pushFn = async (position: PlaybackPosition): Promise<SyncPushResult> => {
       if (!convexIdRef.current) throw new Error("No Convex ID yet");
       const result = await updatePosition({
         audiobookId: convexIdRef.current as Id<"audiobooks">,
         ...toSyncPosition(book.chapters, position),
         clientUpdatedAt: position.updatedAt,
+        baseRevision: position.revision ?? 0,
+        operationId: position.operationId ?? `legacy:${position.updatedAt}`,
+        sessionId: position.sessionId ?? "legacy-import",
       });
       return {
         accepted: result.accepted,
+        revision: result.revision,
         serverPosition: result.serverPosition && {
           ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
         },
@@ -369,6 +377,13 @@ export function Player({
   }
 
   return (
+    <>
+      {syncState.conflict && <div role="alert" className="p-4 bg-card border-b border-border space-y-2 text-sm">
+        <p>Another device has a different position. Your local progress is saved.</p>
+        <p>Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1}, {formatTime(syncState.pending?.positionMs ?? 0)}. Other device: chapter {syncState.conflict.chapterIndex + 1}, {formatTime(syncState.conflict.positionMs)}.</p>
+        <button className="mr-4 underline" onClick={() => void syncEngineRef.current?.resolveConflict("local")}>Keep this device</button>
+        <button className="underline" onClick={() => void syncEngineRef.current?.resolveConflict("remote")}>Use other device</button>
+      </div>}
     <PlayerInner
       book={book}
       initialChapter={initialChapter}
@@ -387,6 +402,7 @@ export function Player({
       onRelocate={onRelocate}
       seekToRef={seekToRef}
     />
+    </>
   );
 }
 

@@ -19,6 +19,11 @@ export interface PlaybackPosition {
   chapterIndex: number;
   positionMs: number;
   updatedAt: number;
+  /** Last server revision observed by this device (absent on 0.x caches). */
+  revision?: number;
+  dirty?: boolean;
+  operationId?: string;
+  sessionId?: string;
 }
 
 export type SyncStatus = "idle" | "synced" | "syncing" | "error";
@@ -28,6 +33,7 @@ export interface SyncState {
   pending: PlaybackPosition | null;
   lastSyncedAt: number | null;
   lastError: string | null;
+  conflict?: PlaybackPosition | null;
 }
 
 export interface PlayerState {
@@ -46,7 +52,8 @@ export interface StorageAdapter {
 
 export interface SyncPushResult {
   accepted: boolean;
-  serverPosition: { chapterIndex: number; positionMs: number; updatedAt: number } | null;
+  revision?: number;
+  serverPosition: { chapterIndex: number; positionMs: number; updatedAt: number; revision?: number } | null;
 }
 
 export type SyncPushFn = (position: PlaybackPosition) => Promise<SyncPushResult>;

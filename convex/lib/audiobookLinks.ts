@@ -7,6 +7,11 @@ export async function resolveCanonicalAudiobookId(
   identity: ResolvedAuthIdentity,
   audiobookId: Id<"audiobooks">,
 ): Promise<Id<"audiobooks">> {
+  const original = await ctx.db.get(audiobookId);
+  if (original?.recordingId) {
+    const recording = await ctx.db.get(original.recordingId);
+    if (recording && matchesUserId(recording.userId, identity)) return recording._id;
+  }
   const path: Id<"audiobooks">[] = [];
   let current = audiobookId;
   while (!path.includes(current)) {
@@ -48,7 +53,14 @@ export async function getLatestGroupPosition(
   ctx: QueryCtx | MutationCtx,
   identity: ResolvedAuthIdentity,
   audiobookId: Id<"audiobooks">,
+  scanGroup = false,
 ) {
+  const root = await resolveCanonicalAudiobookId(ctx, identity, audiobookId);
+  if (!scanGroup) {
+    for await (const position of ctx.db.query("positions").withIndex("by_audiobook", (q) => q.eq("audiobookId", root))) {
+      if (position.revision !== undefined && matchesUserId(position.userId, identity)) return position;
+    }
+  }
   const positions = [];
   for (const id of await getLinkedGroup(ctx, identity, audiobookId)) {
     for await (const position of ctx.db.query("positions")
@@ -56,5 +68,5 @@ export async function getLatestGroupPosition(
       if (matchesUserId(position.userId, identity)) positions.push(position);
     }
   }
-  return positions.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+  return positions.sort((a, b) => (b.revision === undefined ? 0 : 1) - (a.revision === undefined ? 0 : 1) || b.updatedAt - a.updatedAt)[0] ?? null;
 }

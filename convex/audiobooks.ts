@@ -30,6 +30,7 @@ const audiobookReturnValidator = v.object({
   _creationTime: v.number(),
   name: v.string(),
   checksum: v.string(),
+  recordingId: v.optional(v.id("audiobooks")),
   chapters: v.array(chapterValidator),
   userId: v.optional(v.string()),
 });
@@ -40,6 +41,22 @@ async function deleteAudiobookCascade(
   ctx: MutationCtx,
   audiobookId: Id<"audiobooks">,
 ) {
+  const identity = await resolveAuthIdentity(ctx);
+  const group = await getLinkedGroup(ctx, identity, audiobookId);
+  const survivors = group.filter((id) => id !== audiobookId);
+  if (survivors.length) {
+    const root = group[0] === audiobookId ? survivors[0] : group[0];
+    const latest = await getLatestGroupPosition(ctx, identity, audiobookId);
+    if (latest?.audiobookId === audiobookId) await ctx.db.patch(latest._id, {
+      audiobookId: root, revision: latest.revision === undefined ? undefined : latest.revision + 1, operationId: undefined,
+    });
+    for (const member of survivors) {
+      await ctx.db.patch(member, { recordingId: root });
+      for (const link of await findOwnedLinksByLinkedId(ctx, identity, member)) await ctx.db.delete(link._id);
+      if (member !== root) await ctx.db.insert("audiobookLinks", { canonicalId: root, linkedId: member, userId: identity.userId });
+    }
+  }
+  for (const row of await ctx.db.query("positionHistory").withIndex("by_userId_and_audiobookId", (q) => q.eq("userId", identity.userId).eq("audiobookId", audiobookId)).take(20)) await ctx.db.delete(row._id);
   const linksAsCanonical = await ctx.db
     .query("audiobookLinks")
     .withIndex("by_canonical", (q) => q.eq("canonicalId", audiobookId))
@@ -236,6 +253,14 @@ export const getOrCreate = mutation({
     const userId = identity.userId;
     await checkRateLimit(ctx, "getOrCreate", userId);
 
+    // An audiobook row represents a recording; names and device paths are labels.
+    // Legacy name/size hashes are never used for content deduplication.
+    if (/^sha256-v1:[a-f0-9]{64}$/.test(args.checksum)) {
+      const recording = await ctx.db.query("audiobooks")
+        .withIndex("by_userId_and_checksum", (q) => q.eq("userId", userId).eq("checksum", args.checksum)).first();
+      if (recording) return { audiobookId: recording._id, isNew: false };
+    }
+
     const existing = await ctx.db
       .query("audiobooks")
       .withIndex("by_user_and_name_checksum", (q) =>
@@ -385,6 +410,19 @@ export const link = mutation({
       result ??= id;
       if (member === args.linkedId) result = id;
     }
+    // A link changes the recording lineage. Invalidate both devices' observed
+    // revisions, even when both independent recordings had the same revision.
+    const latest = await getLatestGroupPosition(ctx, identity, root, true);
+    if (latest?.revision !== undefined) {
+      let maxRevision = latest.revision;
+      for (const member of members) {
+        for await (const pos of ctx.db.query("positions").withIndex("by_audiobook", (q) => q.eq("audiobookId", member))) {
+          if (matchesUserId(pos.userId, identity)) maxRevision = Math.max(maxRevision, pos.revision ?? 0);
+        }
+      }
+      await ctx.db.patch(latest._id, { audiobookId: root, revision: maxRevision + 1, operationId: undefined });
+    }
+    for (const member of members) await ctx.db.patch(member, { recordingId: root });
     if (!result) throw new Error("Unable to link audiobooks");
     return result;
   },
@@ -421,13 +459,18 @@ export const unlink = mutation({
       await ctx.db.insert("positions", {
         audiobookId: detachedId, userId, chapterIndex: latest.chapterIndex,
         positionMs: latest.positionMs, updatedAt: latest.updatedAt,
+        revision: latest.revision === undefined ? undefined : latest.revision + 1,
       });
       if (latest.audiobookId === detachedId) {
         await ctx.db.insert("positions", {
           audiobookId: root, userId, chapterIndex: latest.chapterIndex,
           positionMs: latest.positionMs, updatedAt: latest.updatedAt,
+        revision: latest.revision === undefined ? undefined : latest.revision + 1,
         });
       }
+    }
+    if (latest?.revision !== undefined && latest.audiobookId !== detachedId) {
+      await ctx.db.patch(latest._id, { revision: latest.revision + 1, operationId: undefined });
     }
     for (const row of await findOwnedLinksByLinkedId(ctx, identity, detachedId)) {
       await ctx.db.delete(row._id);
@@ -435,6 +478,7 @@ export const unlink = mutation({
     for (const row of await findOwnedLinksByCanonicalId(ctx, identity, detachedId)) {
       await ctx.db.patch(row._id, { canonicalId: root, userId });
     }
+    await ctx.db.patch(detachedId, { recordingId: detachedId });
     return true;
   },
 });
@@ -488,6 +532,7 @@ export const registerOnDevice = mutation({
 
     const book = await ctx.db.get(args.audiobookId);
     await assertOwnership(ctx, book);
+    if (!book) throw new Error("Audiobook not found");
     await checkDeviceCap(ctx, userId, args.deviceId);
 
     const existing = (await findOwnedDeviceCopies(
@@ -542,19 +587,6 @@ export const removeFromDevice = mutation({
     for (const copy of existing) {
       await ctx.db.delete(copy._id);
       removedFromDevice = true;
-    }
-
-    const remainingCopies = await ctx.db
-      .query("audiobookDeviceCopies")
-      .withIndex("by_audiobook", (q) => q.eq("audiobookId", args.audiobookId))
-      .take(1);
-
-    if (remainingCopies.length === 0) {
-      await deleteAudiobookCascade(ctx, args.audiobookId);
-      return {
-        removedFromDevice,
-        deletedAudiobook: true,
-      };
     }
 
     return {

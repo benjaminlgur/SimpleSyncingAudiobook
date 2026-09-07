@@ -1,3 +1,4 @@
+import type { PlaybackPosition } from "@audiobook/shared";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
@@ -393,7 +394,11 @@ export default function PlayerScreen() {
   // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
     if (initialLoaded || !book || !localInitResolved) return;
-    if (remotePosition === undefined) return;
+    if (remotePosition === undefined) {
+      usedFallbackStartupRef.current = true;
+      setInitialLoaded(true);
+      return;
+    }
 
     const position = syncEngineRef.current?.reconcilePosition(remotePosition);
     if (position) {
@@ -471,25 +476,28 @@ export default function PlayerScreen() {
     }
   }, [book, initialLoaded, remotePosition]);
 
+  useEffect(() => {
+    if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
+  }, [localInitResolved, remotePosition]);
+
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
     if (!book || !syncIdentity || !scopedStorageAdapter) return;
     let cancelled = false;
 
-    const pushFn = async (position: {
-      audiobookId: string;
-      chapterIndex: number;
-      positionMs: number;
-      updatedAt: number;
-    }): Promise<SyncPushResult> => {
+    const pushFn = async (position: PlaybackPosition): Promise<SyncPushResult> => {
       if (!convexId) throw new Error("No Convex ID yet");
       const result = await updatePosition({
         audiobookId: convexId as Id<"audiobooks">,
         ...toSyncPosition(book.chapters, position),
         clientUpdatedAt: position.updatedAt,
+        baseRevision: position.revision ?? 0,
+        operationId: position.operationId ?? `legacy:${position.updatedAt}`,
+        sessionId: position.sessionId ?? "legacy-import",
       });
       return {
         accepted: result.accepted,
+        revision: result.revision,
         serverPosition: result.serverPosition && {
           ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
         },
@@ -596,6 +604,13 @@ export default function PlayerScreen() {
   const fileUris = book.folderPath.split("|");
 
   return (
+    <>
+      {syncState.conflict && <View className="p-4 bg-card">
+        <Text className="text-foreground">Another device has a different position. Your local progress is saved.</Text>
+        <Text className="text-foreground">Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1}, {formatTime(syncState.pending?.positionMs ?? 0)}. Other: chapter {syncState.conflict.chapterIndex + 1}, {formatTime(syncState.conflict.positionMs)}.</Text>
+        <TouchableOpacity onPress={() => void syncEngineRef.current?.resolveConflict("local")}><Text className="text-primary py-2">Keep this device</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => void syncEngineRef.current?.resolveConflict("remote")}><Text className="text-primary py-2">Use other device</Text></TouchableOpacity>
+      </View>}
     <PlayerInner
       book={book}
       sessionKey={sessionKey}
@@ -615,6 +630,7 @@ export default function PlayerScreen() {
       onManualSync={() => syncEngineRef.current?.manualSync()}
       controlsRef={controlsRef}
     />
+    </>
   );
 }
 
