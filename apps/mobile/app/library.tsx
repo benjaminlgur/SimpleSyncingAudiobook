@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { CloudContext } from "@audiobook/shared/react";
 import { importAudio } from "../lib/importAudio";
 import { useState, useEffect, useCallback } from "react";
 import {
@@ -11,7 +13,7 @@ import {
   Image,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useMutation, useQuery } from "convex/react";
+import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -277,6 +279,7 @@ export default function LibraryScreen() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const { ready: cloudReady } = useContext(CloudContext);
   const { client, storageScope, mode } = useConvexContext();
   const { isDark } = useTheme();
   const router = useRouter();
@@ -373,7 +376,7 @@ export default function LibraryScreen() {
     let cancelled = false;
 
     const pruneBooksMissingInDatabase = async () => {
-      if (!client || !storageReady || library.length === 0) return;
+      if (!cloudReady || !client || !storageReady || library.length === 0) return;
 
       const booksWithConvexId = library.filter((book) => !!book.convexId);
       if (booksWithConvexId.length === 0) return;
@@ -403,9 +406,8 @@ export default function LibraryScreen() {
       }
 
       const updated = library
-        .filter((book) => !missingKeys.has(`${book.name}::${book.checksum}`))
         .map((book) =>
-          invalidIdKeys.has(`${book.name}::${book.checksum}`)
+          (missingKeys.has(`${book.name}::${book.checksum}`) || invalidIdKeys.has(`${book.name}::${book.checksum}`))
             ? { ...book, convexId: undefined }
             : book,
         );
@@ -416,7 +418,7 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [client, library, saveLibrary, storageReady]);
+  }, [client, library, saveLibrary, storageReady, cloudReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -466,7 +468,7 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [deviceId, getOrCreate, library, registerOnDevice, saveLibrary, storageReady]);
+  }, [cloudReady, deviceId, getOrCreate, library, registerOnDevice, saveLibrary, storageReady]);
 
   const handlePickFolder = async () => {
     setIsScanning(true);

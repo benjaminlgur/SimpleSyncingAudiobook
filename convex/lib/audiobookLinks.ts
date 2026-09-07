@@ -57,9 +57,10 @@ export async function getLatestGroupPosition(
 ) {
   const root = await resolveCanonicalAudiobookId(ctx, identity, audiobookId);
   if (!scanGroup) {
-    for await (const position of ctx.db.query("positions").withIndex("by_audiobook", (q) => q.eq("audiobookId", root))) {
-      if (position.revision !== undefined && matchesUserId(position.userId, identity)) return position;
-    }
+    const positions = await ctx.db.query("positions").withIndex("by_audiobook", (q) => q.eq("audiobookId", root)).take(201);
+    const versioned = positions.filter((p) => p.revision !== undefined && matchesUserId(p.userId, identity))
+      .sort((a, b) => b.revision! - a.revision!)[0];
+    if (versioned) return versioned;
   }
   const positions = [];
   for (const id of await getLinkedGroup(ctx, identity, audiobookId)) {

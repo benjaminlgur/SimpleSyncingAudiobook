@@ -6,7 +6,7 @@ import {
   Modal,
   FlatList,
 } from "react-native";
-import { useQuery, useMutation } from "convex/react";
+import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";

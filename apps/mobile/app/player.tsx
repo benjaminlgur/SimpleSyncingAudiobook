@@ -1,3 +1,5 @@
+import { CloudContext } from "@audiobook/shared/react";
+import { useContext } from "react";
 import type { PlaybackPosition } from "@audiobook/shared";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
@@ -12,7 +14,7 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMutation, useQuery } from "convex/react";
+import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -157,6 +159,7 @@ export default function PlayerScreen() {
   const { storageScope, mode } = useConvexContext();
   const { isDark } = useTheme();
   const [book, setBook] = useState<LocalAudiobook | null>(null);
+  const { ready: cloudReady } = useContext(CloudContext);
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
     pending: null,
@@ -373,7 +376,7 @@ export default function PlayerScreen() {
 
   // Resolve Convex ID
   useEffect(() => {
-    if (!book || convexId) return;
+    if (!cloudReady || !book || convexId) return;
     (async () => {
       try {
         const result = await getOrCreate({
@@ -389,7 +392,7 @@ export default function PlayerScreen() {
         // Offline
       }
     })();
-  }, [book, convexId, getOrCreate, persistResolvedConvexId]);
+  }, [cloudReady, book, convexId, getOrCreate, persistResolvedConvexId]);
 
   // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
@@ -411,55 +414,6 @@ export default function PlayerScreen() {
     setInitialLoaded(true);
   }, [remotePosition, initialLoaded, book, localInitResolved]);
 
-  // If local state is ready first, only show the warning immediately when
-  // we know the device is offline. Otherwise keep waiting for the remote sync.
-  useEffect(() => {
-    if (initialLoaded || !book || !localInitResolved) return;
-    if (remotePosition !== undefined) return;
-
-    if (convexId) {
-      if (networkStatus === "offline") {
-        setShowOfflinePrompt(true);
-      }
-    } else {
-      setInitialLoaded(true);
-    }
-  }, [
-    convexId,
-    initialLoaded,
-    localInitResolved,
-    networkStatus,
-    remotePosition,
-    book,
-  ]);
-
-  // If remote sync stays unresolved for a while even while online, then
-  // let the user decide whether to continue from local state.
-  useEffect(() => {
-    if (initialLoaded || showOfflinePrompt || !book) return;
-    if (!convexId || remotePosition !== undefined || !localInitResolved) return;
-
-    const timeoutId = setTimeout(() => {
-      if (initialLoadedRef.current) return;
-      setShowOfflinePrompt(true);
-    }, REMOTE_POSITION_PROMPT_DELAY_MS);
-
-    return () => clearTimeout(timeoutId);
-  }, [
-    book,
-    convexId,
-    initialLoaded,
-    localInitResolved,
-    remotePosition,
-    showOfflinePrompt,
-  ]);
-
-  const handleContinueOffline = useCallback(() => {
-    usedFallbackStartupRef.current = true;
-    setShowOfflinePrompt(false);
-    setInitialLoaded(true);
-  }, []);
-
   // If we started from fallback state, adopt remote position once
   // if playback has not progressed yet.
   useEffect(() => {
@@ -479,6 +433,10 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
   }, [localInitResolved, remotePosition]);
+
+  useEffect(() => {
+    if (cloudReady && localInitResolved) void syncEngineRef.current?.onReconnect();
+  }, [cloudReady, localInitResolved]);
 
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
@@ -558,37 +516,6 @@ export default function PlayerScreen() {
   }, []);
 
   if (!book || !initialLoaded) {
-    if (showOfflinePrompt && book) {
-      return (
-        <AppScreen isDark={isDark}>
-          <View className="flex-1 items-center justify-center px-8">
-            <Ionicons name="cloud-offline-outline" size={48} color="#f97316" />
-            <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4 text-center">
-              Unable to Sync
-            </Text>
-            <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center leading-5">
-              The latest position for "{book.name}" couldn't be loaded from the
-              server. Continuing with your local position may cause sync conflicts
-              if you've listened on another device.
-            </Text>
-            <TouchableOpacity
-              onPress={handleContinueOffline}
-              className="mt-6 bg-primary rounded-xl px-6 py-3"
-            >
-              <Text className="text-white font-medium text-sm">
-                Continue with Local Position
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.back()} className="mt-3 py-2">
-              <Text className="text-sm text-gray-500 dark:text-gray-400">
-                Go Back
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </AppScreen>
-      );
-    }
-
     return (
       <AppScreen isDark={isDark}>
         <View className="flex-1 items-center justify-center">

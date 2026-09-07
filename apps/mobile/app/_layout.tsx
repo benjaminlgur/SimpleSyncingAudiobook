@@ -1,3 +1,4 @@
+import { CloudProvider, CloudContext } from "@audiobook/shared/react";
 import { Stack, SplashScreen } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ConvexProvider, ConvexReactClient, useConvexAuth, useQuery } from "convex/react";
@@ -22,7 +23,7 @@ import {
 import { HOSTED_CONVEX_URL } from "../lib/runtimeConfig";
 import "../index";
 import "../global.css";
-import { stopPlaybackSession } from "../lib/playbackSession";
+import { stopPlaybackSession, getPlaybackSession } from "../lib/playbackSession";
 
 SplashScreen.preventAutoHideAsync();
 WebBrowser.maybeCompleteAuthSession();
@@ -103,6 +104,8 @@ function LayoutInner() {
 }
 
 function AppChrome({ contextValue }: { contextValue: ConvexContextType }) {
+  const { ready } = useContext(CloudContext);
+  useEffect(() => { if (ready) void getPlaybackSession()?.engine.onReconnect(); }, [ready]);
   useEffect(() => () => { void stopPlaybackSession(); }, [contextValue.storageScope]);
   useEffect(() => {
     if (!contextValue.storageScope) return;
@@ -138,6 +141,16 @@ function HostedAuthGate({
     api.authState.viewerScope,
     isAuthenticated ? {} : "skip",
   );
+  const cacheKey = `audiobook_account:${encodeURIComponent(convexUrl)}`;
+  const [cachedScope, setCachedScope] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void AsyncStorage.getItem(cacheKey).then((scope) => { if (!cancelled) setCachedScope((current) => current ?? scope); });
+    return () => { cancelled = true; };
+  }, [cacheKey]);
+  useEffect(() => {
+    if (viewerScope) { void AsyncStorage.setItem(cacheKey, viewerScope); setCachedScope(viewerScope); }
+  }, [cacheKey, viewerScope]);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
 
@@ -154,6 +167,8 @@ function HostedAuthGate({
   ) => Promise<{ signingIn: boolean; redirect?: URL }>;
 
   const handleSignIn = useCallback(async () => {
+    await AsyncStorage.removeItem(cacheKey);
+    setCachedScope(null);
     setSigningIn(true);
     setError(null);
 
@@ -198,7 +213,16 @@ function HostedAuthGate({
       setError(message);
       setSigningIn(false);
     }
-  }, [completeOAuthSignIn, signIn]);
+  }, [cacheKey, completeOAuthSignIn, signIn]);
+
+  const scope = viewerScope ?? cachedScope;
+  if (scope && !signingIn) {
+    const ready = isAuthenticated && viewerScope === scope;
+    return <CloudProvider key={scope} ready={ready}>
+      {!ready && <View className="pt-10 px-4 pb-2 bg-white dark:bg-gray-950"><TouchableOpacity onPress={handleSignIn}><Text className="text-orange-500">Local library · Sign in to reconnect</Text></TouchableOpacity></View>}
+      {children(getHostedStorageScope(convexUrl, scope))}
+    </CloudProvider>;
+  }
 
   if ((isLoading || signingIn) && !error) {
     return (
@@ -341,6 +365,8 @@ export default function RootLayout() {
   };
 
   const handleDisconnect = async () => {
+    await stopPlaybackSession();
+    if (convexUrl) await AsyncStorage.removeItem(`audiobook_account:${encodeURIComponent(convexUrl)}`);
     await AsyncStorage.removeItem(CONVEX_URL_KEY);
     await AsyncStorage.removeItem(CONNECTION_MODE_KEY);
     await AsyncStorage.removeItem(ACTIVE_STORAGE_SCOPE_KEY);
@@ -394,7 +420,7 @@ export default function RootLayout() {
       />
     );
 
-    content = client ? <ConvexProvider client={client}>{app}</ConvexProvider> : app;
+    content = client ? <ConvexProvider client={client}><CloudProvider ready={true}>{app}</CloudProvider></ConvexProvider> : app;
   }
 
   return (

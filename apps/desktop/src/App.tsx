@@ -1,3 +1,4 @@
+import { CloudProvider } from "@audiobook/shared/react";
 import { useState, useEffect, createContext, useContext } from "react";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
@@ -67,6 +68,7 @@ export default function App() {
   };
 
   const handleDisconnect = () => {
+    if (convexUrl) localStorage.removeItem(`audiobook_account:${encodeURIComponent(convexUrl)}`);
     localStorage.removeItem(CONVEX_URL_KEY);
     localStorage.removeItem(CONNECTION_MODE_KEY);
     setConvexUrl(null);
@@ -89,8 +91,8 @@ export default function App() {
       <ThemeProvider>
         <ConvexAuthProvider client={client} shouldHandleCode={false}>
           <ConnectionContext.Provider value={{ mode }}>
-            <AuthGate onDisconnect={handleDisconnect}>
-              <AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} />
+            <AuthGate convexUrl={convexUrl} onDisconnect={handleDisconnect}>
+              {(userScope) => <AppShell userScope={userScope} convexUrl={convexUrl} onDisconnect={handleDisconnect} />}
             </AuthGate>
           </ConnectionContext.Provider>
         </ConvexAuthProvider>
@@ -102,7 +104,7 @@ export default function App() {
     <ThemeProvider>
       <ConvexProvider client={client}>
         <ConnectionContext.Provider value={{ mode }}>
-          <AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} />
+          <CloudProvider ready={true}><AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} /></CloudProvider>
         </ConnectionContext.Provider>
       </ConvexProvider>
     </ThemeProvider>

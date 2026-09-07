@@ -1,18 +1,27 @@
-import { useConvexAuth } from "convex/react";
+import { CloudProvider } from "@audiobook/shared/react";
+import { api } from "../../../../convex/_generated/api";
+import { useConvexAuth, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useEffect, useRef, useState } from "react";
 
 interface AuthGateProps {
-  children: React.ReactNode;
+  children: (userScope: string) => React.ReactNode;
+  convexUrl: string;
   onDisconnect: () => void;
 }
 
-export function AuthGate({ children, onDisconnect }: AuthGateProps) {
+export function AuthGate({ children, onDisconnect, convexUrl }: AuthGateProps) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { signIn } = useAuthActions();
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const handledCode = useRef(false);
+  const cacheKey = `audiobook_account:${encodeURIComponent(convexUrl)}`;
+  const [cachedScope, setCachedScope] = useState(() => localStorage.getItem(cacheKey));
+  const viewerScope = useQuery(api.authState.viewerScope, isAuthenticated ? {} : "skip");
+  useEffect(() => {
+    if (viewerScope) { localStorage.setItem(cacheKey, viewerScope); setCachedScope(viewerScope); }
+  }, [cacheKey, viewerScope]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -55,6 +64,8 @@ export function AuthGate({ children, onDisconnect }: AuthGateProps) {
   }, [signIn]);
 
   const handleSignIn = async () => {
+    localStorage.removeItem(cacheKey);
+    setCachedScope(null);
     setSigningIn(true);
     setError(null);
     try {
@@ -74,6 +85,15 @@ export function AuthGate({ children, onDisconnect }: AuthGateProps) {
       setSigningIn(false);
     }
   };
+
+  const scope = viewerScope ?? cachedScope;
+  if (scope && !signingIn) {
+    const ready = isAuthenticated && viewerScope === scope;
+    return <CloudProvider ready={ready}>
+      {!ready && <div className="p-3 bg-card text-sm border-b border-border">Local library. <button className="underline" onClick={handleSignIn}>Sign in to reconnect</button></div>}
+      <div key={scope}>{children(scope)}</div>
+    </CloudProvider>;
+  }
 
   if ((isLoading || signingIn) && !error) {
     return (
@@ -155,5 +175,5 @@ export function AuthGate({ children, onDisconnect }: AuthGateProps) {
     );
   }
 
-  return <>{children}</>;
+  return <div className="p-6">Loading account...</div>;
 }

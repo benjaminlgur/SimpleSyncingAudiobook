@@ -1,5 +1,7 @@
+import { useContext } from "react";
+import { CloudContext } from "@audiobook/shared/react";
 import { useState, useEffect } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { pickAudiobookFolder, pickAudiobookFile, scanAudiobookFolder, scanM4bFile, extractCoverArt, checkPathExists } from "../lib/tauri-fs";
@@ -71,6 +73,7 @@ export function Library({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
+  const { ready: cloudReady } = useContext(CloudContext);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
   const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
   const removeFromDevice = useMutation(api.audiobooks.removeFromDevice);
@@ -121,7 +124,7 @@ export function Library({
     return () => {
       cancelled = true;
     };
-  }, [books, deviceId, getOrCreate, onBookConvexIdResolved, refreshToken, registerOnDevice]);
+  }, [cloudReady, books, deviceId, getOrCreate, onBookConvexIdResolved, refreshToken, registerOnDevice]);
 
   const handleRemoveLocalBook = async (book: LocalAudiobook) => {
     if (deviceId && book.convexId) {

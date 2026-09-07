@@ -1,6 +1,8 @@
+import { CloudContext } from "@audiobook/shared/react";
+import { useContext } from "react";
 import type { PlaybackPosition } from "@audiobook/shared";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
 import { api } from "../../../../convex/_generated/api";
 import { useAudioPlayer } from "../hooks/useAudioPlayer";
 import { SyncEngine, fromSyncPosition, toSyncPosition } from "@audiobook/shared";
@@ -41,6 +43,7 @@ export function Player({
   onConvexIdResolved,
   onRelocate,
 }: PlayerProps) {
+  const { ready: cloudReady } = useContext(CloudContext);
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
     pending: null,
@@ -111,7 +114,7 @@ export function Player({
 
   // Resolve Convex ID on mount if needed
   useEffect(() => {
-    if (convexId) return;
+    if (!cloudReady || convexId) return;
     (async () => {
       try {
         const result = await getOrCreate({
@@ -124,7 +127,7 @@ export function Player({
         // Will retry on next sync
       }
     })();
-  }, [convexId, book, getOrCreate, onConvexIdResolved]);
+  }, [cloudReady, convexId, book, getOrCreate, onConvexIdResolved]);
 
   // Wait for both sources so an older server value cannot erase offline progress.
   useEffect(() => {
@@ -145,41 +148,6 @@ export function Player({
     setShowOfflinePrompt(false);
     setInitialLoaded(true);
   }, [remotePosition, initialLoaded, localInitResolved]);
-
-  // If local state is ready first, only show the warning immediately when
-  // the desktop is offline. Otherwise keep waiting for the remote sync.
-  useEffect(() => {
-    if (initialLoaded || !localInitResolved) return;
-    if (remotePosition !== undefined) return;
-
-    if (convexId) {
-      if (networkStatus === "offline") {
-        setShowOfflinePrompt(true);
-      }
-    } else {
-      setInitialLoaded(true);
-    }
-  }, [convexId, initialLoaded, localInitResolved, networkStatus, remotePosition]);
-
-  // If remote sync stays unresolved for a while even while online, then
-  // let the user decide whether to continue from local state.
-  useEffect(() => {
-    if (initialLoaded || showOfflinePrompt) return;
-    if (!convexId || remotePosition !== undefined || !localInitResolved) return;
-
-    const timeoutId = setTimeout(() => {
-      if (initialLoadedRef.current) return;
-      setShowOfflinePrompt(true);
-    }, REMOTE_POSITION_PROMPT_DELAY_MS);
-
-    return () => clearTimeout(timeoutId);
-  }, [initialLoaded, showOfflinePrompt, localInitResolved, remotePosition, convexId]);
-
-  const handleContinueOffline = useCallback(() => {
-    usedFallbackStartupRef.current = true;
-    setShowOfflinePrompt(false);
-    setInitialLoaded(true);
-  }, []);
 
   const seekToRef = useRef<((chapter: number, ms: number) => void) | null>(null);
 
@@ -202,6 +170,10 @@ export function Player({
   useEffect(() => {
     if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
   }, [localInitResolved, remotePosition]);
+
+  useEffect(() => {
+    if (cloudReady && localInitResolved) void syncEngineRef.current?.onReconnect();
+  }, [cloudReady, localInitResolved]);
 
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
@@ -323,50 +295,6 @@ export function Player({
   }, []);
 
   if (!initialLoaded) {
-    if (showOfflinePrompt) {
-      return (
-        <div className="min-h-screen bg-background flex items-center justify-center">
-          <div className="max-w-sm text-center space-y-4 px-6">
-            <svg
-              className="mx-auto h-12 w-12 text-primary"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
-              />
-            </svg>
-            <h2 className="text-lg font-semibold text-foreground">
-              Unable to Sync
-            </h2>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              The latest position for &ldquo;{book.name}&rdquo; couldn&rsquo;t
-              be loaded from the server. Continuing with your local position may
-              cause sync conflicts if you&rsquo;ve listened on another device.
-            </p>
-            <div className="flex flex-col gap-2 pt-2">
-              <button
-                onClick={handleContinueOffline}
-                className="w-full px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-              >
-                Continue with Local Position
-              </button>
-              <button
-                onClick={onBack}
-                className="w-full px-4 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Go Back
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="animate-pulse text-muted-foreground text-sm">

@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useConvex, useQuery } from "convex/react";
+import { CloudContext } from "@audiobook/shared/react";
+import { useState, useEffect, useCallback, useMemo, useContext } from "react";
+import { useConvex } from "convex/react";
 import { Library } from "./Library";
 import { Player } from "./Player";
 import { Settings } from "./Settings";
@@ -12,6 +13,7 @@ import { getScopedStorageKey, getStorageScope } from "../lib/storageScope";
 
 interface AppShellProps {
   convexUrl: string;
+  userScope?: string;
   onDisconnect: () => void;
 }
 
@@ -161,21 +163,18 @@ function getOrCreateDeviceId(
   return next;
 }
 
-export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
+export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) {
   const convex = useConvex();
   const mode = useConnectionMode();
-  const viewerScope = useQuery(
-    api.authState.viewerScope,
-    mode === "hosted" ? {} : "skip"
-  );
+  const { ready: cloudReady } = useContext(CloudContext);
   const storageScope = useMemo(
     () =>
       getStorageScope({
         mode,
         convexUrl,
-        userScope: mode === "hosted" ? viewerScope ?? null : null,
+        userScope: mode === "hosted" ? userScope ?? null : null,
       }),
-    [convexUrl, mode, viewerScope]
+    [convexUrl, mode, userScope]
   );
   const libraryStorageKey = useMemo(
     () =>
@@ -191,6 +190,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
   const legacyDeviceKey = mode === "self-hosted" ? DEVICE_ID_KEY : undefined;
   const [library, setLibrary] = useState<LocalAudiobook[]>([]);
   const [activeBook, setActiveBook] = useState<LocalAudiobook | null>(null);
+  const [showPlayer, setShowPlayer] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [storageReady, setStorageReady] = useState(false);
@@ -215,6 +215,8 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
       legacyLibraryKey
     );
 
+    setLibrary(storedBooks);
+    setStorageReady(true);
     void (async () => {
       const validated = await Promise.all(
         storedBooks.map(async (book) => {
@@ -243,7 +245,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     let cancelled = false;
 
     const pruneBooksMissingInDatabase = async () => {
-      if (library.length === 0) return;
+      if (!cloudReady || library.length === 0) return;
 
       const booksWithConvexId = library.filter((book) => !!book.convexId);
       if (booksWithConvexId.length === 0) return;
@@ -271,9 +273,8 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
       if ((missingKeys.size === 0 && invalidIdKeys.size === 0) || cancelled) return;
 
       const updated = library
-        .filter((book) => !missingKeys.has(`${book.name}::${book.checksum}`))
         .map((book) =>
-          invalidIdKeys.has(`${book.name}::${book.checksum}`)
+          (missingKeys.has(`${book.name}::${book.checksum}`) || invalidIdKeys.has(`${book.name}::${book.checksum}`))
             ? { ...book, convexId: undefined }
             : book
         );
@@ -286,7 +287,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
         activeBook &&
         missingKeys.has(`${activeBook.name}::${activeBook.checksum}`)
       ) {
-        setActiveBook(null);
+        setActiveBook({ ...activeBook, convexId: undefined });
       }
     };
 
@@ -294,7 +295,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeBook, convex, library, libraryStorageKey]);
+  }, [activeBook, convex, library, libraryStorageKey, cloudReady]);
 
   const persistLibrary = useCallback(
     (books: LocalAudiobook[]) => {
@@ -312,6 +313,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     );
     if (existing) {
       setActiveBook({ ...existing, missing: false });
+      setShowPlayer(true);
       return;
     }
     const updated = [...library, { ...book, missing: false }];
@@ -374,38 +376,33 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     );
   }
 
-  if (activeBook) {
-    return (
-      <Player
-        book={activeBook}
-        convexUrl={convexUrl}
-        storageScope={storageScope}
-        onBack={() => setActiveBook(null)}
-        onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
-        onRelocate={(newPath) => relocateBook(activeBook, newPath)}
-      />
-    );
-  }
-
-  if (showSettings) {
-    return (
-      <Settings
-        onBack={() => setShowSettings(false)}
-        onDisconnect={onDisconnect}
-      />
-    );
-  }
-
   return (
-    <Library
-      deviceId={deviceId}
-      books={library}
-      onAddBook={addBook}
-      onBookConvexIdResolved={updateBookConvexId}
-      onSelectBook={setActiveBook}
-      onRemoveBook={removeBook}
-      onRelocateBook={relocateBook}
-      onOpenSettings={() => setShowSettings(true)}
-    />
+    <>
+      {activeBook && <div hidden={!showPlayer}>
+        <Player
+          key={`${storageScope}:${activeBook.name}:${activeBook.checksum}`}
+          book={activeBook}
+          convexUrl={convexUrl}
+          storageScope={storageScope}
+          onBack={() => setShowPlayer(false)}
+          onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
+          onRelocate={(newPath) => relocateBook(activeBook, newPath)}
+        />
+      </div>}
+      {(!activeBook || !showPlayer) && <>
+        {activeBook && <button className="w-full p-3 bg-card border-b border-border text-primary text-sm" onClick={() => setShowPlayer(true)}>Return to {activeBook.name}</button>}
+        {showSettings ? <Settings onBack={() => setShowSettings(false)} onDisconnect={onDisconnect} /> :
+          <Library
+            deviceId={deviceId}
+            books={library}
+            onAddBook={addBook}
+            onBookConvexIdResolved={updateBookConvexId}
+            onSelectBook={(book) => { setActiveBook(book); setShowPlayer(true); }}
+            onRemoveBook={removeBook}
+            onRelocateBook={relocateBook}
+            onOpenSettings={() => setShowSettings(true)}
+          />}
+      </>}
+    </>
   );
 }
