@@ -15,3 +15,4 @@ export type {
 export { SyncEngine } from "./sync-engine";
 export { computeChecksum } from "./checksum";
 export { toSyncPosition, fromSyncPosition } from "./chapter-position";
+export { recordingFingerprint, fingerprintFile } from "./fingerprint";

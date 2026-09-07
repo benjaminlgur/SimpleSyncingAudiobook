@@ -1,7 +1,9 @@
-import { readDir, readFile, stat, exists } from "@tauri-apps/plugin-fs";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { AudioTokenizer } from "./audio-tokenizer";
+import { readDir, stat, exists } from "@tauri-apps/plugin-fs";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
-import { computeChecksum } from "@audiobook/shared";
+import { recordingFingerprint } from "@audiobook/shared";
 
 const AUDIO_EXTENSIONS = new Set([
   ".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav", ".aac", ".wma",
@@ -88,7 +90,7 @@ export async function scanAudiobookFolder(
     size: f.size,
   }));
 
-  const checksum = computeChecksum(fileInfos);
+  const checksum = recordingFingerprint(await Promise.all(fileInfos.map((file) => invoke<string>("fingerprint_audio", { path: joinPath(folderPath, file.name) }))));
 
   const chapters: ChapterInfo[] = audioFiles.map((f, i) => ({
     index: i,
@@ -116,13 +118,13 @@ export async function scanM4bFile(
   filePath: string
 ): Promise<AudiobookMeta | null> {
   const fileStat = await stat(filePath);
-  const data = await readFile(filePath);
 
-  const { parseBuffer } = await import("music-metadata");
-  const metadata = await parseBuffer(data, {
+
+  const { parseFromTokenizer } = await import("music-metadata");
+  const metadata = await parseFromTokenizer(new AudioTokenizer(filePath, {
     mimeType: "audio/mp4",
     size: fileStat.size,
-  }, { includeChapters: true });
+  }), { includeChapters: true, skipCovers: true });
 
   const totalDurationMs = (metadata.format.duration || 0) * 1000;
   const sampleRate = metadata.format.sampleRate || 44100;
@@ -164,7 +166,7 @@ export async function scanM4bFile(
   }
 
   const fileInfos: FileInfo[] = [{ name: fileName, size: fileStat.size }];
-  const checksum = computeChecksum(fileInfos);
+  const checksum = recordingFingerprint([await invoke<string>("fingerprint_audio", { path: filePath })]);
 
   return {
     name: bookName,
@@ -173,9 +175,6 @@ export async function scanM4bFile(
     folderPath: folder,
   };
 }
-
-let currentBlobUrl: string | null = null;
-let currentBlobFile: string | null = null;
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {
@@ -190,37 +189,13 @@ export async function loadAudioFileAsBlob(
 ): Promise<string> {
   const fullPath = joinPath(folderPath, filename);
 
-  if (currentBlobUrl && currentBlobFile === fullPath) {
-    return currentBlobUrl;
-  }
-
-  if (currentBlobUrl) {
-    URL.revokeObjectURL(currentBlobUrl);
-    currentBlobUrl = null;
-    currentBlobFile = null;
-  }
-
-  const pathExists = await checkPathExists(fullPath);
-  if (!pathExists) {
-    throw new FileNotFoundError(fullPath);
-  }
-
-  const contents = await readFile(fullPath);
-  const ext = filename.split(".").pop()?.toLowerCase() || "mp3";
-  const mime = MIME_TYPES[ext] || "audio/mpeg";
-  const blob = new Blob([contents], { type: mime });
-  currentBlobUrl = URL.createObjectURL(blob);
-  currentBlobFile = fullPath;
-  return currentBlobUrl;
+  if (!await checkPathExists(fullPath)) throw new FileNotFoundError(fullPath);
+  await invoke("authorize_audio", { path: fullPath });
+  return convertFileSrc(fullPath);
 }
 
-export function revokeCurrentAudioBlob() {
-  if (currentBlobUrl) {
-    URL.revokeObjectURL(currentBlobUrl);
-    currentBlobUrl = null;
-    currentBlobFile = null;
-  }
-}
+// Kept as an adapter compatibility hook; file-backed URLs need no Blob cleanup.
+export function revokeCurrentAudioBlob() {}
 
 const coverArtCache = new Map<string, string | null>();
 
@@ -228,7 +203,7 @@ export async function extractCoverArt(
   folderPath: string,
   chapters: ChapterInfo[]
 ): Promise<string | null> {
-  const cacheKey = folderPath;
+  const cacheKey = `${folderPath}:${chapters[0]?.filename ?? ""}`;
   if (coverArtCache.has(cacheKey)) return coverArtCache.get(cacheKey)!;
 
   const seen = new Set<string>();
@@ -241,15 +216,11 @@ export async function extractCoverArt(
       if (ext !== "mp3" && ext !== "m4a" && ext !== "m4b") continue;
 
       const fullPath = joinPath(folderPath, chapter.filename);
-      const headerSize = 512 * 1024;
-      const data = await readFile(fullPath);
-      const buf = data.length > headerSize ? data.slice(0, headerSize) : data;
-
-      const { parseBuffer } = await import("music-metadata");
-      const metadata = await parseBuffer(buf, {
-        mimeType: MIME_TYPES[ext!] || "audio/mpeg",
-        size: data.length,
-      });
+      const info = await stat(fullPath);
+      const { parseFromTokenizer } = await import("music-metadata");
+      const metadata = await parseFromTokenizer(new AudioTokenizer(fullPath, {
+        mimeType: MIME_TYPES[ext!] || "audio/mpeg", size: info.size,
+      }, 8 * 1024 * 1024));
 
       const pic = metadata.common.picture?.[0];
       if (pic) {

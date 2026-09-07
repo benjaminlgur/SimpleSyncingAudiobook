@@ -1,3 +1,4 @@
+import { importAudio } from "../lib/importAudio";
 import { useState, useEffect, useCallback } from "react";
 import {
   View,
@@ -534,12 +535,9 @@ export default function LibraryScreen() {
 
       audioFiles.sort((a, b) => a.name.localeCompare(b.name));
 
-      const fileInfos: FileInfo[] = audioFiles.map((f) => ({
-        name: f.name,
-        size: f.size || 0,
-      }));
-
-      const checksum = computeChecksum(fileInfos);
+      const imported = await importAudio(audioFiles);
+      audioFiles = imported.files;
+      const checksum = imported.checksum;
 
       const chapters: ChapterInfo[] = audioFiles.map((f, i) => ({
         index: i,
@@ -619,10 +617,8 @@ export default function LibraryScreen() {
       }
 
       const bookName = asset.name.replace(/\.[^/.]+$/, "");
-      const fileInfos: FileInfo[] = [
-        { name: asset.name, size: asset.size || 0 },
-      ];
-      const checksum = computeChecksum(fileInfos);
+      const imported = await importAudio([{ uri: asset.uri, name: asset.name, size: asset.size || 0 }]);
+      const checksum = imported.checksum;
 
       const chapters: ChapterInfo[] = [
         {
@@ -638,7 +634,7 @@ export default function LibraryScreen() {
         name: bookName,
         checksum,
         chapters,
-        folderPath: asset.uri,
+        folderPath: imported.files[0].uri,
       };
 
       const existing = library.find(
