@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0
+
+- Open saved libraries and resume locally while cloud authentication reconnects.
+- Keep desktop playback alive while browsing the library or settings, and retain mobile service ownership of synchronization.
+- Replace device-clock conflict resolution with server revisions and idempotent session operations. Divergent offline progress is preserved until you choose which position to keep.
+- Restore any of the last 20 cloud positions from the player.
+- Stream desktop audio from disk and read metadata through bounded random access instead of loading entire books into memory.
+- Identify new imports using ordered SHA-256 file fingerprints, independent of display names. Keep existing IDs and adopt recording references lazily.
+- Store mobile picker imports in app documents and migrate mobile authentication tokens into SecureStore.
+- Require self-hosted access keys by default; store keys in platform credential stores. Validate the server protocol during setup.
+- Retain cloud progress when removing a device copy and preserve remaining linked copies when deleting a recording root.
+- Expand regression and integration coverage, add checks on main and pull requests, and validate production frontend bundles before release deployment.
+
+**Upgrade:** Deploy the backend first and upgrade all devices together. Existing data is preserved through additive schema changes. After a recording adopts version 1 revisions, older clients can read it but cannot write progress. Self-hosted deployments need `SYNC_ACCESS_KEY` (at least 32 random characters) and clients must reconnect with that key. See the README for migration and rollback details.
+
 ## 0.4.5
 
 - Resume from the newest saved position, including progress made offline.
