@@ -1,3 +1,4 @@
+import { checkAccess } from "./lib/access";
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -239,7 +240,7 @@ async function findOwnedLinksByCanonicalId(
 }
 
 export const getOrCreate = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     name: v.string(),
     checksum: v.string(),
     chapters: v.array(chapterValidator),
@@ -249,6 +250,7 @@ export const getOrCreate = mutation({
     isNew: v.boolean(),
   }),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const userId = identity.userId;
     await checkRateLimit(ctx, "getOrCreate", userId);
@@ -296,21 +298,23 @@ export const getOrCreate = mutation({
 });
 
 export const list = query({
-  args: {},
+  args: { syncKey: v.optional(v.string()),},
   returns: v.array(audiobookReturnValidator),
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     return await listOwnedAudiobooks(ctx, identity);
   },
 });
 
 export const listRemoteForDevice = query({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     deviceId: v.string(),
     refreshToken: v.optional(v.number()),
   },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const allUserCopies = await listOwnedDeviceCopies(ctx, identity);
     const localCopies = allUserCopies.filter(
@@ -344,9 +348,10 @@ export const listRemoteForDevice = query({
 });
 
 export const get = query({
-  args: { id: v.id("audiobooks") },
+  args: { syncKey: v.optional(v.string()), id: v.id("audiobooks") },
   returns: v.union(audiobookReturnValidator, v.null()),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const doc = await ctx.db.get(args.id);
     try {
       await assertOwnership(ctx, doc);
@@ -358,9 +363,10 @@ export const get = query({
 });
 
 export const findByName = query({
-  args: { name: v.string() },
+  args: { syncKey: v.optional(v.string()), name: v.string() },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     return (await listOwnedAudiobooks(ctx, identity)).filter(
       (book) => book.name === args.name,
@@ -369,12 +375,13 @@ export const findByName = query({
 });
 
 export const link = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     canonicalId: v.id("audiobooks"),
     linkedId: v.id("audiobooks"),
   },
   returns: v.id("audiobookLinks"),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const userId = identity.userId;
     await checkRateLimit(ctx, "linkUnlink", userId);
@@ -429,12 +436,13 @@ export const link = mutation({
 });
 
 export const unlink = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     audiobookId: v.id("audiobooks"),
     peerId: v.id("audiobooks"),
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const userId = identity.userId;
     await checkRateLimit(ctx, "linkUnlink", userId);
@@ -484,9 +492,10 @@ export const unlink = mutation({
 });
 
 export const getLinked = query({
-  args: { audiobookId: v.id("audiobooks") },
+  args: { syncKey: v.optional(v.string()), audiobookId: v.id("audiobooks") },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
 
     const book = await ctx.db.get(args.audiobookId);
@@ -508,9 +517,10 @@ export const getLinked = query({
 });
 
 export const remove = mutation({
-  args: { id: v.id("audiobooks") },
+  args: { syncKey: v.optional(v.string()), id: v.id("audiobooks") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const book = await ctx.db.get(args.id);
     await assertOwnership(ctx, book);
     await deleteAudiobookCascade(ctx, args.id);
@@ -519,13 +529,14 @@ export const remove = mutation({
 });
 
 export const registerOnDevice = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     audiobookId: v.id("audiobooks"),
     deviceId: v.string(),
     platform: platformValidator,
   },
   returns: v.id("audiobookDeviceCopies"),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const userId = identity.userId;
     await checkRateLimit(ctx, "registerOnDevice", userId);
@@ -562,7 +573,7 @@ export const registerOnDevice = mutation({
 });
 
 export const removeFromDevice = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     audiobookId: v.id("audiobooks"),
     deviceId: v.string(),
   },
@@ -571,6 +582,7 @@ export const removeFromDevice = mutation({
     deletedAudiobook: v.boolean(),
   }),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
 
     const book = await ctx.db.get(args.audiobookId);

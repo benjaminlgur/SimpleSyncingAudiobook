@@ -19,7 +19,7 @@ export interface AudioPlayerControls {
   togglePlayPause: () => void;
   seekTo: (ms: number) => void;
   seekBy: (deltaMs: number) => void;
-  skipToChapter: (index: number, seekMs?: number) => void;
+  skipToChapter: (index: number, seekMs?: number) => Promise<void>;
   nextChapter: () => void;
   prevChapter: () => void;
   setSpeed: (speed: number) => void;
@@ -343,7 +343,7 @@ export function useAudioPlayer(
 
     skipToChapter: useCallback(
       (index: number, seekMs?: number) => {
-        loadChapter(index, seekMs ?? 0);
+        return loadChapter(index, seekMs ?? 0);
       },
       [loadChapter, onChapterChange]
     ),

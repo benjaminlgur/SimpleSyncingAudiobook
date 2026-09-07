@@ -21,7 +21,7 @@ export async function importAudio(files: { uri: string; name: string; size: numb
       }))));
       imported.push({ ...file, uri, size: info.size });
     }
-    return { files: imported, checksum: recordingFingerprint(hashes) };
+    return { files: imported, checksum: recordingFingerprint(hashes), discard: () => FileSystem.deleteAsync(directory, { idempotent: true }) };
   } catch (error) {
     await FileSystem.deleteAsync(directory, { idempotent: true });
     throw error;

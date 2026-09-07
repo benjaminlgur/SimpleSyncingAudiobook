@@ -1,14 +1,17 @@
 # Simple Syncing Audiobook
 
 Simple Syncing Audiobook is a multiplatform app that syncs your listening
-position across devices using Convex. Its disined to be lightweight and low cost where users bring their own audiobook files.
+position across devices using Convex. It is designed to be lightweight and low cost where users bring their own audiobook files.
 
 ## Architecture
+
+See [the architecture and upgrade notes](docs/ARCHITECTURE.md).
+
 
 - **Desktop**: Tauri 2 + Vite + React + shadcn/ui + Tailwind CSS
 - **Mobile (Android)**: Expo + React Native + NativeWind + gluestack-ui
 - **Backend**: Convex (position sync, audiobook metadata)
-- **Shared**: Pure TypeScript sync engine, checksum utility, types
+- **Shared**: TypeScript revision protocol, durable outbox, content fingerprints, cloud access boundary
 
 ## Project Structure
 
@@ -40,9 +43,9 @@ pnpm install
 
 ### 2. Set up your personal Convex backend
 
-Most users should use their own Convex deployment. This mode does not use
-Google sign-in, does not enforce the hosted usage limits, and stores all synced
-data in the Convex project you control.
+Most users should choose hosted Google sign-in in the released app.
+Self-hosting is an advanced option for people who want to operate their own
+backend. It uses a shared access key and stores data in a Convex project you control.
 
 Run this from the repository root:
 
@@ -66,7 +69,11 @@ You can find it in one of these places:
 - the Convex CLI output after `npx convex dev --once`
 - the Convex dashboard for your deployment
 
-Paste that `.convex.cloud` URL into the app setup screen on each device. Do not
+Set `SYNC_ACCESS_KEY` in your Convex deployment environment to a randomly
+generated secret of at least 32 characters. Enter the same access key and
+`.convex.cloud` URL on each device. Keys are kept in Windows Credential Manager,
+macOS Keychain, Linux Secret Service, or mobile SecureStore. Linux requires an
+unlocked Secret Service provider (such as GNOME Keyring or KWallet). Do not
 paste the `.convex.site` URL; that site URL is only used for hosted Google
 OAuth callbacks.
 
@@ -82,9 +89,10 @@ Useful Convex commands:
 | `npx convex dev --once` | Push backend changes once for local testing |
 | `npx convex deploy` | Deploy backend changes to a production Convex deployment |
 
-Because personal mode has no authentication, treat the Convex URL as your sync
-endpoint. Anyone who has the URL can call this app's public Convex functions for
-that deployment.
+Self-hosted access fails closed without a configured key.
+`ALLOW_INSECURE_SELF_HOSTED=true` explicitly restores the old unauthenticated
+behavior for isolated development only; it is not the default. Never put an
+access key in a public build environment variable or a Git commit.
 
 ### 3. Run the desktop app
 
@@ -109,8 +117,8 @@ The app supports two ways to connect:
   authentication, per-user data isolation, and usage limits (200 audiobooks,
   10 devices). Regular app users do not need to set up Convex for this mode.
 - **Bring your own Convex URL**: the user creates their own Convex deployment
-  and pastes its `.convex.cloud` URL. This mode has no auth, no app-enforced
-  limits, and full control over the synced data.
+  and enters its `.convex.cloud` URL and access key. This mode gives the
+  operator control over the synced data. All devices sharing a key share a library.
 
 Both options appear on the setup screen. The Google option only shows in builds
 where `VITE_HOSTED_CONVEX_URL` (desktop) or `EXPO_PUBLIC_HOSTED_CONVEX_URL`
@@ -130,12 +138,18 @@ where `VITE_HOSTED_CONVEX_URL` (desktop) or `EXPO_PUBLIC_HOSTED_CONVEX_URL`
 - Immediate sync on: pause, chapter change, app background, app close
 - Offline queue: latest position stored locally, flushed on reconnect
 - Manual sync available via the Sync button
+- Server revisions reject concurrent offline forks without relying on device clocks
+- Choose this device or the other device when positions conflict
+- Recent positions provides the last 20 server recovery points
+- Previously signed-in accounts can open their local library while reconnecting
+- Desktop playback continues when navigating to the library or settings
 
 ## Audiobook Linking
 
-Audiobooks are automatically matched across devices by folder name + file
-checksum. If auto-matching fails (different encodings, etc.), you can manually
-link audiobooks from the library view.
+New imports are matched by SHA-256 fingerprints of their ordered file contents,
+independent of display names. Legacy imports retain their old IDs and progress.
+Different encodings and narrations are not automatically equivalent. Manual links
+assert that the files share the same timeline; link only compatible editions.
 
 ## Hosted Deployment Setup (Google Sign-In)
 
@@ -291,3 +305,33 @@ Release builds also require the GitHub Actions repository variable
 `HOSTED_CONVEX_URL` to point at the hosted `.convex.cloud` URL, and the secret
 `CONVEX_DEPLOY_KEY_PROD` to contain a production deploy key for the hosted
 Convex project.
+
+## Upgrading to 1.0
+
+Update the backend before the apps, and upgrade all devices together. The schema
+upgrade is additive: existing libraries, links, and positions remain readable.
+Recording references and revision state are adopted transactionally on first use;
+there is no destructive bulk migration or required backfill. Tests exercise 0.x
+positions, old link chains, concurrent first writes, and deletion of linked roots.
+
+Once a recording has a 1.0 revision, 0.x clients can read its position but their
+writes are rejected with an upgrade message. This prevents legacy timestamps
+from overwriting revision-controlled progress. Rolling clients back to 0.x will
+not restore writes to those recordings. Keep a database backup before operating
+any deployment rollback; do not remove the additive schema fields.
+
+Self-hosted users must configure `SYNC_ACCESS_KEY`, deploy 1.0, then reconnect
+clients using the URL and key. Upgraded clients with an old URL-only configuration
+can still open local books while awaiting a key. Mobile imports are copied into
+app documents and therefore need enough free disk space for the imported audio.
+Existing imports are preserved; re-import a legacy mobile book if its picker
+cache was removed by the operating system.
+
+## Verification
+
+Run `pnpm verify` for all TypeScript checks, regression/integration tests, the
+production desktop web build, and the Android JavaScript export. Run
+`cargo test --lib --locked` in `apps/desktop/src-tauri` for native disk tests.
+Release CI builds Windows, Linux, macOS (ARM and Intel), and the Android APK.
+Physical-device audio routing and OS notification behavior still need device QA;
+compile and mocked native-service tests cannot certify those behaviors.

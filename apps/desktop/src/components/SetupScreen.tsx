@@ -1,7 +1,10 @@
+import { normalizeDeploymentUrl } from "@audiobook/shared";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../../../convex/_generated/api";
 import { useState } from "react";
 
 interface SetupScreenProps {
-  onSelfHostedConnect: (url: string) => void;
+  onSelfHostedConnect: (url: string, syncKey: string) => void | Promise<void>;
   onHostedConnect?: () => void;
 }
 
@@ -10,29 +13,23 @@ export function SetupScreen({
   onHostedConnect,
 }: SetupScreenProps) {
   const [url, setUrl] = useState("");
+  const [syncKey, setSyncKey] = useState("");
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = url.trim();
-
-    if (!trimmed) {
-      setError("Please enter a Convex deployment URL");
-      return;
-    }
-
-    if (
-      !trimmed.startsWith("https://") ||
-      !trimmed.includes(".convex.cloud")
-    ) {
-      setError(
-        "URL should look like: https://your-project-123.convex.cloud",
-      );
-      return;
-    }
-
+    setConnecting(true);
     setError(null);
-    onSelfHostedConnect(trimmed);
+    try {
+      const endpoint = normalizeDeploymentUrl(url);
+      const client = new ConvexHttpClient(endpoint);
+      const result = await client.query(api.authState.checkConnection, { syncKey: syncKey.trim() || undefined });
+      if (result.protocolVersion !== 1) throw new Error("Upgrade this deployment to version 1.0 first");
+      await onSelfHostedConnect(endpoint, syncKey.trim());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to connect. Check the URL, key, and server version.");
+    } finally { setConnecting(false); }
   };
 
   return (
@@ -122,11 +119,15 @@ export function SetupScreen({
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
 
+            <label className="block text-sm text-foreground">Self-hosted access key
+              <input type="password" autoComplete="off" value={syncKey} onChange={(e) => setSyncKey(e.target.value)} className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2" />
+            </label>
             <button
               type="submit"
+              disabled={connecting}
               className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
-              Connect
+              {connecting ? "Connecting..." : "Connect"}
             </button>
           </form>
         </div>

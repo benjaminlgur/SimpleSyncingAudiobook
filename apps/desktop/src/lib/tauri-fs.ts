@@ -122,7 +122,7 @@ export async function scanM4bFile(
 
   const { parseFromTokenizer } = await import("music-metadata");
   const metadata = await parseFromTokenizer(new AudioTokenizer(filePath, {
-    mimeType: "audio/mp4",
+    mimeType: MIME_TYPES[baseName(filePath).split(".").pop()?.toLowerCase() ?? ""] || "audio/mp4",
     size: fileStat.size,
   }), { includeChapters: true, skipCovers: true });
 

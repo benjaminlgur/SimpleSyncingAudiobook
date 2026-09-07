@@ -7,6 +7,7 @@ import {
   Text,
   TouchableOpacity,
   FlatList,
+  ScrollView,
   Modal,
   Image,
   ActivityIndicator,
@@ -41,7 +42,6 @@ const LAST_PLAYING_BOOK_KEY = "audiobook_last_playing_book_key";
 const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 const PROGRESS_THUMB_SIZE = 16;
 const PROGRESS_THUMB_RADIUS = PROGRESS_THUMB_SIZE / 2;
-const REMOTE_POSITION_PROMPT_DELAY_MS = 12_000;
 
 interface LocalAudiobook extends AudiobookMeta {
   convexId?: string;
@@ -166,25 +166,20 @@ export default function PlayerScreen() {
     lastSyncedAt: null,
     lastError: null,
   });
+  const [showHistory, setShowHistory] = useState(false);
   const [showChapters, setShowChapters] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [initialChapter, setInitialChapter] = useState(0);
   const [initialPosition, setInitialPosition] = useState(0);
   const [initialLoaded, setInitialLoaded] = useState(false);
   const [localInitResolved, setLocalInitResolved] = useState(false);
-  const [showOfflinePrompt, setShowOfflinePrompt] = useState(false);
-  const [networkStatus, setNetworkStatus] = useState<
-    "unknown" | "online" | "offline"
-  >("unknown");
+
 
   const syncEngineRef = useRef<SyncEngine | null>(null);
   const controlsRef = useRef<{
     skipToChapter: (index: number, seekMs?: number) => Promise<void>;
   } | null>(null);
   const initialLoadedRef = useRef(false);
-  const usedFallbackStartupRef = useRef(false);
-  const playbackProgressedRef = useRef(false);
-  const lateRemoteAppliedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
   const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
@@ -205,43 +200,6 @@ export default function PlayerScreen() {
   useEffect(() => {
     initialLoadedRef.current = initialLoaded;
   }, [initialLoaded]);
-
-  useEffect(() => {
-    let active = true;
-
-    const applyNetworkState = ({
-      isConnected,
-      isInternetReachable,
-    }: {
-      isConnected: boolean | null;
-      isInternetReachable: boolean | null;
-    }) => {
-      if (isConnected === false || isInternetReachable === false) {
-        setNetworkStatus("offline");
-      } else if (isConnected === true && isInternetReachable === true) {
-        setNetworkStatus("online");
-      } else if (isConnected === true) {
-        setNetworkStatus("unknown");
-      }
-    };
-
-    NetInfo.fetch().then((state) => {
-      if (!active) return;
-      applyNetworkState(state);
-    });
-
-    const unsubNet = NetInfo.addEventListener((state) => {
-      if (state.isConnected && state.isInternetReachable) {
-        syncEngineRef.current?.onReconnect();
-      }
-      applyNetworkState(state);
-    });
-
-    return () => {
-      active = false;
-      unsubNet();
-    };
-  }, []);
 
   // Load book from local storage
   useEffect(() => {
@@ -285,11 +243,7 @@ export default function PlayerScreen() {
     setInitialPosition(0);
     setInitialLoaded(false);
     setLocalInitResolved(false);
-    setShowOfflinePrompt(false);
     initialLoadedRef.current = false;
-    usedFallbackStartupRef.current = false;
-    playbackProgressedRef.current = false;
-    lateRemoteAppliedRef.current = false;
   }, [bookKey]);
 
   const convexId = book?.convexId;
@@ -310,6 +264,7 @@ export default function PlayerScreen() {
         : null,
     [storageScope, convexId],
   );
+  const history = useQuery(api.positions.history, convexId && showHistory ? { audiobookId: convexId as Id<"audiobooks"> } : "skip");
   const remoteWirePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
@@ -398,7 +353,6 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (initialLoaded || !book || !localInitResolved) return;
     if (remotePosition === undefined) {
-      usedFallbackStartupRef.current = true;
       setInitialLoaded(true);
       return;
     }
@@ -409,26 +363,8 @@ export default function PlayerScreen() {
       setInitialPosition(position.positionMs);
     }
     initialLoadedRef.current = true;
-    usedFallbackStartupRef.current = false;
-    setShowOfflinePrompt(false);
     setInitialLoaded(true);
   }, [remotePosition, initialLoaded, book, localInitResolved]);
-
-  // If we started from fallback state, adopt remote position once
-  // if playback has not progressed yet.
-  useEffect(() => {
-    if (!book || !initialLoaded || !remotePosition) return;
-    if (!usedFallbackStartupRef.current) return;
-    if (lateRemoteAppliedRef.current || playbackProgressedRef.current) return;
-
-    lateRemoteAppliedRef.current = true;
-    const position = syncEngineRef.current?.reconcilePosition(remotePosition);
-    if (position) {
-      setInitialChapter(position.chapterIndex);
-      setInitialPosition(position.positionMs);
-      void controlsRef.current?.skipToChapter(position.chapterIndex, position.positionMs);
-    }
-  }, [book, initialLoaded, remotePosition]);
 
   useEffect(() => {
     if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
@@ -449,7 +385,7 @@ export default function PlayerScreen() {
         audiobookId: convexId as Id<"audiobooks">,
         ...toSyncPosition(book.chapters, position),
         clientUpdatedAt: position.updatedAt,
-        baseRevision: position.revision ?? 0,
+        baseRevision: position.revision ?? -1,
         operationId: position.operationId ?? `legacy:${position.updatedAt}`,
         sessionId: position.sessionId ?? "legacy-import",
       });
@@ -493,16 +429,12 @@ export default function PlayerScreen() {
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
-      if (chapterIndex > 0 || positionMs > 0) {
-        playbackProgressedRef.current = true;
-      }
       syncEngineRef.current?.updatePosition(chapterIndex, positionMs);
     },
     [],
   );
 
   const handleChapterChange = useCallback(() => {
-    playbackProgressedRef.current = true;
     syncEngineRef.current?.onChapterChange();
   }, []);
 
@@ -511,7 +443,6 @@ export default function PlayerScreen() {
   }, []);
 
   const handlePlay = useCallback(() => {
-    playbackProgressedRef.current = true;
     // Playback-state events start sync timers, including notification controls.
   }, []);
 
@@ -532,6 +463,18 @@ export default function PlayerScreen() {
 
   return (
     <>
+      <View className="px-4 py-2 bg-white dark:bg-gray-950">
+        <TouchableOpacity onPress={() => setShowHistory(!showHistory)}><Text className="text-gray-500">{showHistory ? "Hide recent positions" : "Recent positions"}</Text></TouchableOpacity>
+        {showHistory && <ScrollView style={{ maxHeight: 140 }}>
+          {history?.length === 0 && <Text className="text-gray-500">No earlier positions saved yet.</Text>}
+          {history?.map((row) => {
+            const position = fromSyncPosition(book.chapters, row);
+            return <TouchableOpacity key={row.revision} disabled={!!syncState.conflict} onPress={() => void syncEngineRef.current?.restorePosition(position.chapterIndex, position.positionMs)}>
+              <Text className="py-2 text-orange-500">Restore chapter {position.chapterIndex + 1}, {formatTime(position.positionMs)} · {new Date(row.updatedAt).toLocaleString()}</Text>
+            </TouchableOpacity>;
+          })}
+        </ScrollView>}
+      </View>
       {syncState.conflict && <View className="p-4 bg-card">
         <Text className="text-foreground">Another device has a different position. Your local progress is saved.</Text>
         <Text className="text-foreground">Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1}, {formatTime(syncState.pending?.positionMs ?? 0)}. Other: chapter {syncState.conflict.chapterIndex + 1}, {formatTime(syncState.conflict.positionMs)}.</Text>

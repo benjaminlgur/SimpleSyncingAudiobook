@@ -58,7 +58,7 @@ export interface SyncPushResult {
 
 export type SyncPushFn = (position: PlaybackPosition) => Promise<SyncPushResult>;
 
-export type OnRemoteNewerFn = (remote: { chapterIndex: number; positionMs: number }) => void;
+export type OnRemoteNewerFn = (remote: { chapterIndex: number; positionMs: number }) => void | Promise<void>;
 
 export interface FileInfo {
   name: string;

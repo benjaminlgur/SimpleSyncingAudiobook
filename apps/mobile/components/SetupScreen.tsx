@@ -1,3 +1,6 @@
+import { normalizeDeploymentUrl } from "@audiobook/shared";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../../convex/_generated/api";
 import { useState } from "react";
 import {
   View,
@@ -12,7 +15,7 @@ import { useColorScheme } from "nativewind";
 import { AppScreen } from "./AppScreen";
 
 interface SetupScreenProps {
-  onSelfHostedConnect: (url: string) => void;
+  onSelfHostedConnect: (url: string, syncKey: string) => void | Promise<void>;
   onHostedConnect?: () => void;
 }
 
@@ -21,22 +24,24 @@ export function SetupScreen({
   onHostedConnect,
 }: SetupScreenProps) {
   const [url, setUrl] = useState("");
+  const [syncKey, setSyncKey] = useState("");
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
 
-  const handleSubmit = () => {
-    const trimmed = url.trim();
-    if (!trimmed) {
-      setError("Please enter a Convex deployment URL");
-      return;
-    }
-    if (!trimmed.startsWith("https://") || !trimmed.includes(".convex.cloud")) {
-      setError("URL should look like: https://your-project-123.convex.cloud");
-      return;
-    }
+  const handleSubmit = async () => {
+    setConnecting(true);
     setError(null);
-    onSelfHostedConnect(trimmed);
+    try {
+      const endpoint = normalizeDeploymentUrl(url);
+      const client = new ConvexHttpClient(endpoint);
+      const result = await client.query(api.authState.checkConnection, { syncKey: syncKey.trim() || undefined });
+      if (result.protocolVersion !== 1) throw new Error("Upgrade this deployment to version 1.0 first");
+      await onSelfHostedConnect(endpoint, syncKey.trim());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to connect. Check the URL, key, and server version.");
+    } finally { setConnecting(false); }
   };
 
   return (
@@ -102,8 +107,10 @@ export function SetupScreen({
             )}
           </View>
 
+          <Text className="text-sm text-gray-700 dark:text-gray-300 mt-3 mb-2">Self-hosted access key</Text>
+          <TextInput value={syncKey} onChangeText={setSyncKey} secureTextEntry autoCapitalize="none" autoCorrect={false} className="border border-gray-300 dark:border-gray-700 rounded-xl p-3 text-gray-900 dark:text-gray-100 mb-4" />
           <TouchableOpacity
-            onPress={handleSubmit}
+            onPress={handleSubmit} disabled={connecting}
             className="bg-primary rounded-xl py-3.5 items-center"
           >
             <Text className="text-white font-medium text-sm">Connect</Text>

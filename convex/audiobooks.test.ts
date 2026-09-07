@@ -5,7 +5,7 @@ import { api } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
-beforeEach(() => vi.stubEnv("REQUIRE_AUTH", "false"));
+beforeEach(() => (vi.stubEnv("REQUIRE_AUTH", "false"), vi.stubEnv("ALLOW_INSECURE_SELF_HOSTED", "true")));
 afterEach(() => vi.unstubAllEnvs());
 
 async function fixture() {

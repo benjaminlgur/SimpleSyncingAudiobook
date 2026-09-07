@@ -145,3 +145,38 @@ test("invalid player samples cannot corrupt saved progress", () => {
   engine.updatePosition(0, Infinity);
   expect(engine.getState().pending?.positionMs).toBe(1000);
 });
+
+test("a stale subscription cannot create a false conflict after an acknowledgement", async () => {
+  const engine = create(vi.fn(async (): Promise<SyncPushResult> => ({ accepted: true, revision: 2, serverPosition: null })));
+  engine.reconcilePosition({ ...position(1000, 1), revision: 1 });
+  engine.updatePosition(0, 2000);
+  await engine.manualSync();
+  engine.updatePosition(0, 3000);
+  engine.reconcilePosition({ ...position(1000, 1), revision: 1 });
+  expect(engine.getState().conflict).toBeFalsy();
+  expect(engine.getState().pending).toMatchObject({ revision: 2, positionMs: 3000 });
+});
+
+test("a failed local save is surfaced and does not claim a successful sync", async () => {
+  const push = vi.fn(async () => accepted);
+  const engine = new SyncEngine("book", { getItem: async () => null, setItem: async () => { throw new Error("Disk full"); }, removeItem: async () => {} }, push);
+  engines.push(engine);
+  engine.updatePosition(0, 8000);
+  await engine.manualSync();
+  expect(push).not.toHaveBeenCalled();
+  expect(engine.getState()).toMatchObject({ status: "error", lastError: "Disk full", pending: { positionMs: 8000 } });
+});
+
+test("native samples during an asynchronous conflict seek cannot undo the chosen position", async () => {
+  let completeSeek!: () => void;
+  const engine = new SyncEngine("book", { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} }, async () => accepted,
+    () => new Promise<void>((resolve) => { completeSeek = resolve; }));
+  engines.push(engine);
+  engine.updatePosition(0, 8000);
+  engine.reconcilePosition({ ...position(2000, 1), revision: 2 });
+  const choosing = engine.resolveConflict("remote");
+  engine.updatePosition(0, 8500);
+  completeSeek();
+  await choosing;
+  expect(engine.getState().pending).toMatchObject({ revision: 2, positionMs: 2000, dirty: false });
+});

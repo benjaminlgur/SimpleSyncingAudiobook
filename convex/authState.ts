@@ -1,5 +1,15 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { checkAccess } from "./lib/access";
+
+export const checkConnection = query({
+  args: { syncKey: v.optional(v.string()) },
+  returns: v.object({ protocolVersion: v.number() }),
+  handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
+    return { protocolVersion: 1 };
+  },
+});
 
 export const viewerScope = query({
   args: {},

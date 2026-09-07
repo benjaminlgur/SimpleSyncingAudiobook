@@ -34,7 +34,7 @@ export function openPlaybackSession(
     await stopPlaybackSession();
     if (!isCurrent()) throw new Error("Playback session cancelled");
     const engine = new SyncEngine(audiobookId, storage, push, (position) => {
-      void seekPlaybackSession(position.chapterIndex, position.positionMs);
+      return seekPlaybackSession(position.chapterIndex, position.positionMs);
     });
     const session = { key, engine, chapters, ready: false, playing: false };
     active = session;

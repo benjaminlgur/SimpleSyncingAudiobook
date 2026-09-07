@@ -207,26 +207,9 @@ export function Library({
         return;
       }
 
-      let convexId: string | undefined;
-      try {
-        const result = await getOrCreate({
-          name: meta.name,
-          checksum: meta.checksum,
-          chapters: meta.chapters,
-        });
-        convexId = result.audiobookId;
-        await registerOnDevice({
-          audiobookId: result.audiobookId,
-          deviceId,
-          platform: "desktop",
-        });
-      } catch {
-        // Offline — will sync later
-      }
-
-      onAddBook({ ...meta, convexId });
+      onAddBook(meta);
     } catch (err) {
-      console.error("Failed to scan folder:", err);
+      alert(err instanceof Error ? err.message : "Failed to import audiobook folder");
     } finally {
       setIsScanning(false);
     }
@@ -244,26 +227,9 @@ export function Library({
         return;
       }
 
-      let convexId: string | undefined;
-      try {
-        const result = await getOrCreate({
-          name: meta.name,
-          checksum: meta.checksum,
-          chapters: meta.chapters,
-        });
-        convexId = result.audiobookId;
-        await registerOnDevice({
-          audiobookId: result.audiobookId,
-          deviceId,
-          platform: "desktop",
-        });
-      } catch {
-        // Offline — will sync later
-      }
-
-      onAddBook({ ...meta, convexId });
+      onAddBook(meta);
     } catch (err) {
-      console.error("Failed to scan file:", err);
+      alert(err instanceof Error ? err.message : "Failed to import audiobook file");
     } finally {
       setIsScanning(false);
     }

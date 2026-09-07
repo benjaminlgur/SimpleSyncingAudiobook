@@ -1,3 +1,4 @@
+import { checkAccess } from "./lib/access";
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
@@ -22,9 +23,10 @@ const positionReturnValidator = v.object({
 });
 
 export const get = query({
-  args: { audiobookId: v.id("audiobooks") },
+  args: { syncKey: v.optional(v.string()), audiobookId: v.id("audiobooks") },
   returns: v.union(positionReturnValidator, v.null()),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
 
     const book = await ctx.db.get(args.audiobookId);
@@ -37,9 +39,10 @@ export const get = query({
 });
 
 export const history = query({
-  args: { audiobookId: v.id("audiobooks") },
+  args: { syncKey: v.optional(v.string()), audiobookId: v.id("audiobooks") },
   returns: v.array(v.object({ chapterIndex: v.number(), positionMs: v.number(), updatedAt: v.number(), revision: v.number() })),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     const identity = await resolveAuthIdentity(ctx);
     const book = await ctx.db.get(args.audiobookId);
     await assertOwnership(ctx, book);
@@ -52,7 +55,7 @@ export const history = query({
 });
 
 export const update = mutation({
-  args: {
+  args: { syncKey: v.optional(v.string()),
     audiobookId: v.id("audiobooks"),
     chapterIndex: v.number(),
     positionMs: v.number(),
@@ -76,11 +79,12 @@ export const update = mutation({
     ),
   }),
   handler: async (ctx, args) => {
+    await checkAccess(ctx, args.syncKey);
     if (!Number.isSafeInteger(args.chapterIndex) || args.chapterIndex < 0 ||
         !Number.isFinite(args.positionMs) || args.positionMs < 0 ||
         !Number.isFinite(args.clientUpdatedAt)) throw new Error("Invalid playback position");
     const versioned = args.baseRevision !== undefined;
-    if (versioned && (!Number.isSafeInteger(args.baseRevision) || args.baseRevision! < 0 ||
+    if (versioned && (!Number.isSafeInteger(args.baseRevision) || args.baseRevision! < -1 ||
         !args.operationId || args.operationId.length > 200 || !args.sessionId || args.sessionId.length > 200)) throw new Error("Invalid sync revision or session");
     const identity = await resolveAuthIdentity(ctx);
     const userId = identity.userId;
@@ -104,7 +108,7 @@ export const update = mutation({
       };
     }
     // Missing server progress is a new lineage; do not reuse a deleted revision.
-    if (!existing && versioned && args.baseRevision !== 0) throw new Error("Server progress was removed; reconnect this recording before syncing");
+    if (!existing && versioned && args.baseRevision! > 0) throw new Error("Server progress was removed; reconnect this recording before syncing");
     if (versioned && book.recordingId === undefined) {
       for (const member of await getLinkedGroup(ctx, identity, args.audiobookId)) await ctx.db.patch(member, { recordingId: canonicalId });
     }

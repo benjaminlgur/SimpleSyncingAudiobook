@@ -279,7 +279,7 @@ export default function LibraryScreen() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const { ready: cloudReady } = useContext(CloudContext);
+  const { ready: cloudReady, syncKey } = useContext(CloudContext);
   const { client, storageScope, mode } = useConvexContext();
   const { isDark } = useTheme();
   const router = useRouter();
@@ -388,6 +388,7 @@ export default function LibraryScreen() {
         booksWithConvexId.map(async (book) => {
           try {
             const doc = await client.query(api.audiobooks.get, {
+              syncKey,
               id: book.convexId as Id<"audiobooks">,
             });
             if (!doc) {
@@ -418,7 +419,7 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [client, library, saveLibrary, storageReady, cloudReady]);
+  }, [client, library, saveLibrary, storageReady, cloudReady, syncKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -562,6 +563,7 @@ export default function LibraryScreen() {
         (b) => b.name === meta.name && b.checksum === meta.checksum,
       );
       if (existing) {
+        await imported.discard();
         router.push({
           pathname: "/player",
           params: { bookKey: `${existing.name}::${existing.checksum}` },
@@ -569,29 +571,9 @@ export default function LibraryScreen() {
         return;
       }
 
-      let convexId: string | undefined;
-      try {
-        const res = await getOrCreate({
-          name: meta.name,
-          checksum: meta.checksum,
-          chapters: meta.chapters,
-        });
-        convexId = res.audiobookId;
-        if (deviceId) {
-          await registerOnDevice({
-            audiobookId: res.audiobookId,
-            deviceId,
-            platform: "mobile",
-          });
-        }
-      } catch {
-        // Offline
-      }
-
-      const newBook = { ...meta, convexId };
-      await saveLibrary([...library, newBook]);
+      await saveLibrary([...library, meta]);
     } catch (err) {
-      console.error("Pick error:", err);
+      Alert.alert("Import failed", err instanceof Error ? err.message : "Unable to import files");
     } finally {
       setIsScanning(false);
     }
@@ -643,6 +625,7 @@ export default function LibraryScreen() {
         (b) => b.name === meta.name && b.checksum === meta.checksum,
       );
       if (existing) {
+        await imported.discard();
         router.push({
           pathname: "/player",
           params: { bookKey: `${existing.name}::${existing.checksum}` },
@@ -650,29 +633,9 @@ export default function LibraryScreen() {
         return;
       }
 
-      let convexId: string | undefined;
-      try {
-        const res = await getOrCreate({
-          name: meta.name,
-          checksum: meta.checksum,
-          chapters: meta.chapters,
-        });
-        convexId = res.audiobookId;
-        if (deviceId) {
-          await registerOnDevice({
-            audiobookId: res.audiobookId,
-            deviceId,
-            platform: "mobile",
-          });
-        }
-      } catch {
-        // Offline
-      }
-
-      const newBook = { ...meta, convexId };
-      await saveLibrary([...library, newBook]);
+      await saveLibrary([...library, meta]);
     } catch (err) {
-      console.error("Pick M4B error:", err);
+      Alert.alert("Import failed", err instanceof Error ? err.message : "Unable to import file");
     } finally {
       setIsScanning(false);
     }

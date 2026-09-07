@@ -166,7 +166,7 @@ function getOrCreateDeviceId(
 export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) {
   const convex = useConvex();
   const mode = useConnectionMode();
-  const { ready: cloudReady } = useContext(CloudContext);
+  const { ready: cloudReady, syncKey } = useContext(CloudContext);
   const storageScope = useMemo(
     () =>
       getStorageScope({
@@ -257,6 +257,7 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
         booksWithConvexId.map(async (book) => {
           try {
             const doc = await convex.query(api.audiobooks.get, {
+              syncKey,
               id: book.convexId as Id<"audiobooks">,
             });
             if (!doc) {
@@ -295,7 +296,7 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
     return () => {
       cancelled = true;
     };
-  }, [activeBook, convex, library, libraryStorageKey, cloudReady]);
+  }, [activeBook, convex, library, libraryStorageKey, cloudReady, syncKey]);
 
   const persistLibrary = useCallback(
     (books: LocalAudiobook[]) => {

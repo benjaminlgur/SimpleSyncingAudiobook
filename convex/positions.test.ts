@@ -4,7 +4,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-beforeEach(() => vi.stubEnv("REQUIRE_AUTH", "false"));
+beforeEach(() => (vi.stubEnv("REQUIRE_AUTH", "false"), vi.stubEnv("ALLOW_INSECURE_SELF_HOSTED", "true")));
 async function fixture() {
   const t = convexTest(schema, import.meta.glob("./**/*.ts"));
   const { audiobookId } = await t.mutation(api.audiobooks.getOrCreate, { name: "Book", checksum: "legacy", chapters: [{ index: 0, filename: "book.mp3" }] });
@@ -32,6 +32,14 @@ test("adopts 0.x progress lazily and rejects further legacy writes", async () =>
   expect(await t.query(api.positions.get, { audiobookId })).toMatchObject({ revision: 0, positionMs: 8000 });
   expect(await push(0, 7000)).toMatchObject({ accepted: true, revision: 1 });
   await expect(t.mutation(api.positions.update, { audiobookId, chapterIndex: 0, positionMs: 9000, clientUpdatedAt: 99999999999999 })).rejects.toThrow("Upgrade all devices");
+});
+
+test("an unobserved legacy baseline cannot overwrite a server position during cold start", async () => {
+  const { t, audiobookId, push } = await fixture();
+  await t.mutation(api.positions.update, { audiobookId, chapterIndex: 0, positionMs: 9000, clientUpdatedAt: 100 });
+  expect(await push(-1, 1000)).toMatchObject({ accepted: false, serverPosition: { positionMs: 9000, revision: 0 } });
+  const fresh = await fixture();
+  expect(await fresh.push(-1, 3000)).toMatchObject({ accepted: true, revision: 1 });
 });
 
 test("recovery history is bounded and account scoped", async () => {

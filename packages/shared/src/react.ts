@@ -4,23 +4,24 @@ import type { FunctionReference, OptionalRestArgs } from "convex/server";
 
 /** Local scope is independent of cloud authorization. Never queue writes under
  * an unverified account and replay them after an account switch. */
-export const CloudContext = createContext<{ ready: boolean; canSync: () => boolean }>({ ready: true, canSync: () => true });
+export const CloudContext = createContext<{ ready: boolean; canSync: () => boolean; syncKey?: string }>({ ready: true, canSync: () => true });
 
 /** The application owns this capability so background services observe changes
  * even after the screen that created their push adapter has unmounted. */
-export function CloudProvider({ ready, children }: { ready: boolean; children: ReactNode }) {
+export function CloudProvider({ ready, children, syncKey }: { ready: boolean; children: ReactNode; syncKey?: string }) {
   const connection = useConvexConnectionState();
   const allowed = ready && connection.isWebSocketConnected;
   const current = useRef(allowed);
   current.current = allowed;
   useEffect(() => { current.current = allowed; return () => { current.current = false; }; }, [allowed]);
   const canSync = useCallback(() => current.current, []);
-  return createElement(CloudContext.Provider, { value: { ready: allowed, canSync } }, children);
+  return createElement(CloudContext.Provider, { value: { ready: allowed, canSync, syncKey } }, children);
 }
 
 export function useCloudQuery<Q extends FunctionReference<"query">>(query: Q, ...args: OptionalRestArgsOrSkip<Q>) {
-  const { ready } = useContext(CloudContext);
-  return useQuery(query, ...(ready ? args : ["skip"]) as OptionalRestArgsOrSkip<Q>);
+  const { ready, syncKey } = useContext(CloudContext);
+  const scopedArgs = syncKey && args[0] !== "skip" ? [{ ...args[0], syncKey }] : args;
+  return useQuery(query, ...(ready ? scopedArgs : ["skip"]) as OptionalRestArgsOrSkip<Q>);
 }
 
 export function useCloudMutation<M extends FunctionReference<"mutation">>(reference: M) {
@@ -28,6 +29,6 @@ export function useCloudMutation<M extends FunctionReference<"mutation">>(refere
   const access = useContext(CloudContext);
   return useCallback((...args: OptionalRestArgs<M>) => {
     if (!access.canSync()) return Promise.reject(new Error("Local progress saved. Sign in or reconnect to sync."));
-    return mutation(...args);
-  }, [mutation, access.canSync]);
+    return mutation(...(access.syncKey ? [{ ...args[0], syncKey: access.syncKey }] : args) as OptionalRestArgs<M>);
+  }, [mutation, access.canSync, access.syncKey]);
 }

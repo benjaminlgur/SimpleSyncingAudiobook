@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { CloudProvider } from "@audiobook/shared/react";
 import { useState, useEffect, createContext, useContext } from "react";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
@@ -28,6 +29,7 @@ export function useConnectionMode() {
 export default function App() {
   const [convexUrl, setConvexUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<ConnectionMode | null>(null);
+  const [syncKey, setSyncKey] = useState<string | undefined>(undefined);
   const [client, setClient] = useState<ConvexReactClient | null>(null);
 
   useEffect(() => {
@@ -35,6 +37,7 @@ export default function App() {
     const storedMode =
       (localStorage.getItem(CONNECTION_MODE_KEY) as ConnectionMode) || null;
     if (storedUrl) {
+      if ((storedMode ?? "self-hosted") === "self-hosted") void invoke<string | null>("get_sync_key", { endpoint: storedUrl }).then((key) => setSyncKey(key ?? undefined)).catch(() => setSyncKey(undefined));
       setConvexUrl(storedUrl);
       setMode(storedMode ?? "self-hosted");
     }
@@ -52,7 +55,9 @@ export default function App() {
     };
   }, [convexUrl]);
 
-  const handleSelfHostedConnect = (url: string) => {
+  const handleSelfHostedConnect = async (url: string, key: string) => {
+    await invoke("set_sync_key", { endpoint: url, value: key });
+    setSyncKey(key);
     localStorage.setItem(CONVEX_URL_KEY, url);
     localStorage.setItem(CONNECTION_MODE_KEY, "self-hosted");
     setConvexUrl(url);
@@ -68,6 +73,8 @@ export default function App() {
   };
 
   const handleDisconnect = () => {
+    if (convexUrl && mode === "self-hosted") void invoke("set_sync_key", { endpoint: convexUrl, value: null }).catch(() => {});
+    setSyncKey(undefined);
     if (convexUrl) localStorage.removeItem(`audiobook_account:${encodeURIComponent(convexUrl)}`);
     localStorage.removeItem(CONVEX_URL_KEY);
     localStorage.removeItem(CONNECTION_MODE_KEY);
@@ -104,7 +111,10 @@ export default function App() {
     <ThemeProvider>
       <ConvexProvider client={client}>
         <ConnectionContext.Provider value={{ mode }}>
-          <CloudProvider ready={true}><AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} /></CloudProvider>
+          <CloudProvider ready={syncKey !== undefined} syncKey={syncKey}>
+            {syncKey === undefined && <div className="p-3 text-sm">Local library. <button className="underline" onClick={handleDisconnect}>Configure your self-hosted access key</button></div>}
+            <AppShell convexUrl={convexUrl} onDisconnect={handleDisconnect} />
+          </CloudProvider>
         </ConnectionContext.Provider>
       </ConvexProvider>
     </ThemeProvider>

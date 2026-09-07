@@ -1,3 +1,4 @@
+import { secureStorage } from "../lib/secureStorage";
 import { CloudProvider, CloudContext } from "@audiobook/shared/react";
 import { Stack, SplashScreen } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -30,11 +31,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 const CONVEX_URL_KEY = "audiobook_convex_url";
 const CONNECTION_MODE_KEY = "audiobook_connection_mode";
-const asyncStorageTokenStorage = {
-  getItem: (key: string) => AsyncStorage.getItem(key),
-  setItem: (key: string, value: string) => AsyncStorage.setItem(key, value),
-  removeItem: (key: string) => AsyncStorage.removeItem(key),
-};
+const asyncStorageTokenStorage = secureStorage;
 
 export type ConnectionMode = "hosted" | "self-hosted";
 
@@ -43,7 +40,7 @@ interface ConvexContextType {
   mode: ConnectionMode | null;
   storageScope: string | null;
   setConvexUrl: (url: string | null) => void;
-  setSelfHostedUrl: (url: string) => void;
+  setSelfHostedUrl: (url: string, syncKey: string) => void | Promise<void>;
   setHostedMode: () => void;
   disconnect: () => void;
   client: ConvexReactClient | null;
@@ -301,6 +298,7 @@ function HostedAuthGate({
 export default function RootLayout() {
   const [convexUrl, setConvexUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<ConnectionMode | null>(null);
+  const [syncKey, setSyncKey] = useState<string | undefined>(undefined);
   const [client, setClient] = useState<ConvexReactClient | null>(null);
   const [loaded, setLoaded] = useState(false);
   const clientRef = useRef<ConvexReactClient | null>(null);
@@ -311,6 +309,7 @@ export default function RootLayout() {
       AsyncStorage.getItem(CONNECTION_MODE_KEY),
     ]).then(([storedUrl, storedMode]) => {
       if (storedUrl) {
+        if ((storedMode ?? "self-hosted") === "self-hosted") void secureStorage.getItem(`sync_key:${storedUrl}`).then((key) => setSyncKey(key ?? undefined));
         setConvexUrl(storedUrl);
         setMode((storedMode as ConnectionMode) ?? "self-hosted");
       }
@@ -349,7 +348,9 @@ export default function RootLayout() {
     setConvexUrl(url);
   };
 
-  const handleSelfHostedUrl = async (url: string) => {
+  const handleSelfHostedUrl = async (url: string, key: string) => {
+    await secureStorage.setItem(`sync_key:${url}`, key);
+    setSyncKey(key);
     await AsyncStorage.setItem(CONVEX_URL_KEY, url);
     await AsyncStorage.setItem(CONNECTION_MODE_KEY, "self-hosted");
     setConvexUrl(url);
@@ -365,6 +366,8 @@ export default function RootLayout() {
   };
 
   const handleDisconnect = async () => {
+    if (convexUrl && mode === "self-hosted") await secureStorage.removeItem(`sync_key:${convexUrl}`);
+    setSyncKey(undefined);
     await stopPlaybackSession();
     if (convexUrl) await AsyncStorage.removeItem(`audiobook_account:${encodeURIComponent(convexUrl)}`);
     await AsyncStorage.removeItem(CONVEX_URL_KEY);
@@ -420,7 +423,10 @@ export default function RootLayout() {
       />
     );
 
-    content = client ? <ConvexProvider client={client}><CloudProvider ready={true}>{app}</CloudProvider></ConvexProvider> : app;
+    content = client ? <ConvexProvider client={client}><CloudProvider ready={syncKey !== undefined} syncKey={syncKey}>
+      {syncKey === undefined && <View className="pt-10 px-4"><TouchableOpacity onPress={handleDisconnect}><Text className="text-orange-500">Local library · Configure your self-hosted access key</Text></TouchableOpacity></View>}
+      {app}
+    </CloudProvider></ConvexProvider> : app;
   }
 
   return (

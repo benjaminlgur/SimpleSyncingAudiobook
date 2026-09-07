@@ -30,10 +30,12 @@ export class SyncEngine {
   private isPlaying = false;
   private initialization: Promise<PlaybackPosition | null> | null = null;
   private persistence: Promise<void> = Promise.resolve();
+  private localSaveFailed = false;
   private syncing: Promise<void> | null = null;
   private syncRequested = false;
   private readonly sessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   private sequence = 0;
+  private applyingPosition = 0;
   private inFlight: PlaybackPosition | null = null;
 
   constructor(
@@ -112,6 +114,7 @@ export class SyncEngine {
   reconcilePosition(remote: Omit<PlaybackPosition, "audiobookId"> | null): PlaybackPosition | null {
     const local = this.state.pending;
     if (remote?.revision !== undefined) {
+      if (local?.revision !== undefined && remote.revision < local.revision) return local;
       if (local && remote.operationId && (remote.operationId === local.operationId || remote.operationId === this.inFlight?.operationId)) {
         this.state.pending = { ...local, revision: remote.revision, dirty: local.operationId !== remote.operationId };
         void this.persistLocally();
@@ -122,7 +125,7 @@ export class SyncEngine {
         // permits the old timestamp comparison during upgrade.
         if (local.revision === undefined && remote.revision === 0 && local.updatedAt <= remote.updatedAt) {
           this.state.pending = { ...remote, audiobookId: this.audiobookId, dirty: false };
-        } else if ((local.revision ?? 0) !== remote.revision) {
+        } else if ((local.revision ?? 0) < remote.revision) {
           this.setConflict({ ...remote, audiobookId: this.audiobookId });
         } else {
           this.state.pending = { ...local, revision: remote.revision };
@@ -134,6 +137,10 @@ export class SyncEngine {
       this.state.pending = { ...remote, audiobookId: this.audiobookId };
     }
     void this.persistLocally();
+    if (this.state.pending !== local && this.state.pending?.dirty === false &&
+        (!local || local.chapterIndex !== this.state.pending.chapterIndex || local.positionMs !== this.state.pending.positionMs)) {
+      void this.applyToPlayer(this.state.pending);
+    }
     return this.state.pending;
   }
 
@@ -151,10 +158,24 @@ export class SyncEngine {
       ? { ...remote, audiobookId: this.audiobookId, dirty: false }
       : { ...this.state.pending, revision: remote.revision, dirty: true,
           sessionId: this.sessionId, operationId: `${this.sessionId}:${++this.sequence}` };
-    if (choice === "remote") this.onRemoteNewer?.(remote);
+    if (choice === "remote") await this.applyToPlayer(remote);
     this.setStatus(choice === "remote" ? "synced" : "idle");
     await this.persistLocally();
     if (choice === "local") await this.syncToRemote();
+  }
+
+  private async applyToPlayer(position: { chapterIndex: number; positionMs: number }) {
+    this.applyingPosition++;
+    try { const seeking = this.onRemoteNewer?.(position); if (seeking) await seeking; }
+    catch (error) { this.setStatus("error", error instanceof Error ? error.message : "Unable to seek to saved position"); }
+    finally { this.applyingPosition--; }
+  }
+
+  async restorePosition(chapterIndex: number, positionMs: number) {
+    if (this.state.conflict) return;
+    this.updatePosition(chapterIndex, positionMs);
+    await this.applyToPlayer({ chapterIndex, positionMs });
+    await this.manualSync();
   }
 
   startTimers(playing: boolean) {
@@ -184,6 +205,7 @@ export class SyncEngine {
   }
 
   updatePosition(chapterIndex: number, positionMs: number) {
+    if (this.applyingPosition) return;
     if (!Number.isSafeInteger(chapterIndex) || chapterIndex < 0 || !Number.isFinite(positionMs) || positionMs < 0) return;
     if (this.state.pending?.chapterIndex === chapterIndex &&
         this.state.pending.positionMs === positionMs) return;
@@ -244,7 +266,8 @@ export class SyncEngine {
     const value = JSON.stringify({ ...this.state.pending, conflict: this.state.conflict ?? null });
     this.persistence = this.persistence.then(() => this.storage.setItem(
       STORAGE_KEY_PREFIX + this.audiobookId, value,
-    )).catch((error: unknown) => {
+    )).then(() => { this.localSaveFailed = false; }).catch((error: unknown) => {
+      this.localSaveFailed = true;
       this.setStatus("error", error instanceof Error ? error.message : "Local save failed");
     });
     return this.persistence;
@@ -273,6 +296,8 @@ export class SyncEngine {
       this.state.pending = sent;
       await this.persistLocally();
     }
+    await this.persistLocally();
+    if (this.localSaveFailed) return;
     this.inFlight = sent;
     this.setStatus("syncing");
 

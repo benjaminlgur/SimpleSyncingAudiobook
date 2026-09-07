@@ -32,3 +32,36 @@ or remote progress. Server revisions serialize writes and retries are idempotent
 Cached account scopes authorize local access only; server identity remains the
 authority for every network request. Local files and cached metadata are subject
 to the operating system user's access controls.
+
+## Implemented ownership
+
+`SyncEngine` owns the durable pending position, server revision, operation IDs,
+conflicts, and reconciliation. A playback session owns its engine and platform
+transport. The desktop application retains its Player subtree when changing
+pages; selecting another recording or closing the application disposes it. The
+mobile native service owns its session independently of the navigation screen.
+`CloudProvider` owns the live authorization capability used by screen queries and
+background push adapters, and revokes it on account/provider teardown.
+
+An `audiobooks` row is the catalog recording; `audiobookDeviceCopies` records
+which devices have a copy. Local libraries own paths and local chapter labels.
+Optional `recordingId` references make migrated progress reads direct; legacy
+links are read only to adopt old groups and implement explicit link/unlink edits.
+Linking, unlinking, and root removal advance revisions to invalidate stale writes.
+Removing a device copy retains the recording and progress. An explicit server
+removal detaches local metadata instead of deleting local audio.
+
+Self-hosted access keys protect all public data queries and mutations. Hosted
+requests require their authenticated account regardless of supplied keys. Protocol
+1 connection checks prevent a new self-hosted client from silently connecting to
+an incompatible backend. Shared keys are suited to personal deployments, not
+multi-tenant access control; hosted identity is the multi-user path.
+
+## Remaining tradeoffs
+
+The desktop transport is an application-mounted React owner, not a separate OS
+service. Closing the desktop application stops playback. Local catalog storage
+still uses scoped JSON for a small personal library; a transactional local database
+would be appropriate if catalogs grow substantially or imports become concurrent.
+No cross-encoding audio alignment is attempted. Adding that would need a separate
+edition/timeline mapping model and evidence that positions can be translated.
