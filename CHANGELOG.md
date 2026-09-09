@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- Prevent offline playback restored from an older cache without a revision from silently overwriting cloud progress during upgrade. Reconnecting now requires an explicit choice between local and cloud positions.
+- Add four integration regressions covering stale offline listening with legacy and versioned progress, with either the cloud read or the upload arriving first. Verify that continued listening cannot bypass the conflict and choosing cloud progress seeks to the saved position.
+- Increment the Android build version for the patch update.
+
+**Upgrade:** Install 1.0.1 on every device. The fix is in the shared desktop and mobile client; updating only the backend does not fix installed 1.0.0 clients. No schema migration is required.
+
 ## 1.0.0
 
 - Open saved libraries and resume locally while cloud authentication reconnects.

@@ -28,7 +28,7 @@
       "esbuild"
     ]
   },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "dependencies": {
     "@auth/core": "0.37.0",
     "@convex-dev/auth": "^0.0.91",
