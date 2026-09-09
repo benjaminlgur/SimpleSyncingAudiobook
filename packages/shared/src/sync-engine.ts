@@ -121,11 +121,10 @@ export class SyncEngine {
         return this.state.pending;
       }
       if (local && (local.dirty !== false || this.isPlaying)) {
-        // Legacy caches have no base revision. Only the initial legacy revision
-        // permits the old timestamp comparison during upgrade.
-        if (local.revision === undefined && remote.revision === 0 && local.updatedAt <= remote.updatedAt) {
-          this.state.pending = { ...remote, audiobookId: this.audiobookId, dirty: false };
-        } else if ((local.revision ?? 0) < remote.revision) {
+        // An unknown base cannot establish that local playback includes remote
+        // progress, even for legacy revision zero. Listening updates timestamps
+        // without observing the server, so never use them to authorize a write.
+        if ((local.revision ?? -1) < remote.revision) {
           this.setConflict({ ...remote, audiobookId: this.audiobookId });
         } else {
           this.state.pending = { ...local, revision: remote.revision };
