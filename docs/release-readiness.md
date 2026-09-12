@@ -123,9 +123,9 @@ retains both positions and requires an explicit choice. Delayed/failed native
 seeks and stale in-flight native reads cannot acquire the cloud revision and then
 publish old progress under it.
 
-Physical-device background audio, notification controls, OS keyring behavior,
-Windows certificate signing, and macOS notarization still need platform validation
-with the release credentials. A JavaScript export alone does not validate these.
+OS keyring behavior with stored credentials, signed installation/update flows,
+Windows certificate signing, and macOS notarization still need validation with
+the release credentials. A JavaScript export alone does not validate these.
 
 Local validation on September 11, 2026 passed the full `pnpm verify` suite,
 formatter checks, three Rust tests, clean Expo Android prebuild, and Track Player's
@@ -171,6 +171,8 @@ debug build passed. Live account authentication, real cloud synchronization, and
 signed Windows installer/update installation were not part of this isolated UI
 test. The upgrade branch and these desktop fixes remain unreleased.
 
+### Native Android validation
+
 For the Expo 57 branch, `apps/mobile/native-tests/playerSmoke.ts` exercises the
 actual native player rather than mocks. It checks a cloud seek queued before
 setup, chapter/position acknowledgement, advancing playback, speed, pause,
@@ -180,6 +182,27 @@ disposable project with `node scripts/prepare-native-player-smoke.mjs`. In
 then start Metro from that same directory and launch the generated smoke app.
 Look for `PLAYER_SMOKE: PASS` in Android logcat. The fixture uses a generated
 silent WAV, memory storage, a separate application ID, and no Convex connection.
+
+On September 12, the ARM64 debug build passed and was installed as the separate
+`com.simplesyncing.audiobook.smoke` app on a Samsung SM-S918U1 running Android 16.
+Two unchanged warm launches passed all native smoke assertions. An additional
+session continued playing for over a minute in the background, including track
+repeat. Tapping the actual Android notification's Pause and Play controls emitted
+the corresponding remote events and changed native playback state correctly.
+The existing app's installation metadata remained unchanged; test processes and
+USB forwarding were cleaned up. The separate smoke app remains installed.
+
+The initial launch exceeded the smoke test's polling deadline despite continuously
+advancing native progress events. Its cause remains unestablished; the two later
+passes do not establish that the initial timing issue is resolved. The physical
+tests used silent audio and stubbed cloud persistence. Audible output, real
+cross-device cloud sync, screen lock, Bluetooth, long-duration battery/Doze
+behavior, and a release-signed upgrade were not exercised. Local evidence is
+under `.native-validation/physical-android/RESULTS.md` and its accompanying logs.
+
+For this Windows physical-device session, Metro also needed `EXPO_OFFLINE=1` and
+`CI=1` alongside IPv4 localhost. CI mode avoids a workspace file-watcher startup
+timeout; it serves the bundle without watching for subsequent edits.
 
 Expo Doctor still flags the upstream `react-native-track-player` package as
 unsupported on the new architecture. Its registry metadata does not describe
