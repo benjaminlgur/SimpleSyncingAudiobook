@@ -3,10 +3,14 @@ import {
   AbstractTokenizer,
   EndOfStreamError,
   type IReadChunkOptions,
+  type IRandomAccessTokenizer,
 } from "strtok3/core";
 
 /** Random access to native audio. No audio payload is buffered while skipping. */
-export class AudioTokenizer extends AbstractTokenizer {
+export class AudioTokenizer
+  extends AbstractTokenizer
+  implements IRandomAccessTokenizer
+{
   private bytesRead = 0;
   constructor(
     readonly path: string,
@@ -17,6 +21,11 @@ export class AudioTokenizer extends AbstractTokenizer {
   }
   supportsRandomAccess() {
     return true;
+  }
+  setPosition(position: number) {
+    if (!Number.isSafeInteger(position) || position < 0)
+      throw new RangeError("Invalid audio metadata position");
+    this.position = position;
   }
   async peekBuffer(buffer: Uint8Array, options?: IReadChunkOptions) {
     const opts = this.normalizeOptions(buffer, options);

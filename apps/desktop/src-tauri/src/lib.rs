@@ -105,12 +105,20 @@ async fn fingerprint_audio(path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let updater_configured = context.config().plugins.0.contains_key("updater");
+    let builder = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![authorize_audio, read_audio_range, fingerprint_audio, get_sync_key, set_sync_key, audio_file_size, audio_path_exists, list_audio_files])
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .run(tauri::generate_context!())
+        .plugin(tauri_plugin_process::init());
+    // Release preparation supplies the updater key and endpoints. Local builds
+    // must also start before that release-only configuration exists.
+    let builder = if updater_configured {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+    builder.run(context)
         .expect("error while running tauri application");
 }
 

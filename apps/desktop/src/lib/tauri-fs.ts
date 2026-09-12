@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { AudioTokenizer } from "./audio-tokenizer";
+import { readMp4ChapterList } from "./mp4-chapters";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { recordingFingerprint } from "@audiobook/shared";
@@ -123,15 +124,23 @@ export async function scanM4bFile(
   };
 
   const { parseFromTokenizer } = await import("music-metadata");
-  const metadata = await parseFromTokenizer(
-    new AudioTokenizer(filePath, {
-      mimeType:
-        MIME_TYPES[baseName(filePath).split(".").pop()?.toLowerCase() ?? ""] ||
-        "audio/mp4",
-      size: fileStat.size,
-    }),
-    { includeChapters: true, skipCovers: true },
-  );
+  const tokenizer = new AudioTokenizer(filePath, {
+    mimeType:
+      MIME_TYPES[baseName(filePath).split(".").pop()?.toLowerCase() ?? ""] ||
+      "audio/mp4",
+    size: fileStat.size,
+  });
+  const extension = baseName(filePath).split(".").pop()?.toLowerCase();
+  const chapterList =
+    extension === "m4b" || extension === "m4a"
+      ? await readMp4ChapterList(tokenizer)
+      : [];
+  // Prefer the explicit chapter list, including when moov follows mdat or
+  // several chapter titles share a chunk unsupported by the upstream parser.
+  const metadata = await parseFromTokenizer(tokenizer, {
+    includeChapters: chapterList.length === 0,
+    skipCovers: true,
+  });
 
   const totalDurationMs = (metadata.format.duration || 0) * 1000;
   const sampleRate = metadata.format.sampleRate || 44100;
@@ -143,7 +152,20 @@ export async function scanM4bFile(
 
   const rawChapters = metadata.format.chapters;
 
-  if (rawChapters && rawChapters.length > 1) {
+  if (chapterList.length > 0) {
+    chapters = chapterList.map((chapter, index) => {
+      const endMs =
+        chapterList[index + 1]?.startMs ?? Math.round(totalDurationMs);
+      return {
+        index,
+        filename: fileName,
+        title: chapter.title,
+        startMs: chapter.startMs,
+        endMs,
+        durationMs: endMs - chapter.startMs,
+      };
+    });
+  } else if (rawChapters && rawChapters.length > 1) {
     chapters = rawChapters.map((ch, i) => {
       const startSec = chapterStartSec(ch, sampleRate);
       const startMs = Math.round(startSec * 1000);

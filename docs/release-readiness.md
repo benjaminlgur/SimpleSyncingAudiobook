@@ -58,6 +58,8 @@ Desktop release builds embed the updater public key and the repository's publish
 action assembles the update manifest. Only published releases become visible.
 The desktop checks on startup, offers installation, pauses and saves playback
 before restarting, and verifies updater signatures.
+Local builds without updater configuration skip native updater registration so
+they can start before release credentials are configured.
 
 Mobile includes `expo-updates`. Set repository variable `EXPO_UPDATE_URL` to an
 HTTPS Expo Updates-compatible endpoint (for example an existing EAS Update
@@ -135,6 +137,39 @@ Linux builds in GitHub Actions. The downloaded APK and AAB matched the project's
 release certificate, the Linux updater signature verified, and the public
 updater manifest resolves v1.0.2. A version-script regression test on main brings
 the automated test total to 80.
+
+### Windows desktop interaction validation (September 12)
+
+The Expo 57 branch was built as a native Windows Tauri application and exercised
+with Windows computer use. A separate application identifier and WebView profile
+held a saved offline connection and generated audio; these checks did not use an
+account or modify the user's audiobook library.
+
+Verified through the native UI:
+
+- Importing a folder containing two WAV chapters using the Windows folder picker.
+- Playback, pause, forward/backward 30-second seeks, scrubbing, speed selection,
+  chapter selection, and continued playback while visiting the library.
+- Closing during playback and restoring chapter two at 1:30, paused, on restart.
+- M4B import with metadata both before and after the audio payload, including two
+  embedded chapter names and their durations; automatic chapter transition and
+  restoration of chapter two at 0:25 after restarting.
+- Light-theme selection and persistence, and a recoverable update-check failure
+  in the local build without a configured updater.
+
+The interaction tests found and fixed a local-build updater initialization crash,
+the random-access tokenizer's missing `setPosition` method, and unsupported M4B
+chapter layouts. The desktop now reads explicit Nero `chpl` chapter lists with
+bounded reads and keeps the existing parser for other metadata. This handles
+metadata after `mdat` and grouped chapter samples without buffering the audio.
+Format reference: [FFmpeg's chapter-list reader](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mov.c).
+Previously imported library entries retain their existing chapter metadata.
+
+After these fixes, all **86** automated tests, desktop TypeScript/production
+build, targeted lint/format checks, three Rust tests, and the native Windows
+debug build passed. Live account authentication, real cloud synchronization, and
+signed Windows installer/update installation were not part of this isolated UI
+test. The upgrade branch and these desktop fixes remain unreleased.
 
 For the Expo 57 branch, `apps/mobile/native-tests/playerSmoke.ts` exercises the
 actual native player rather than mocks. It checks a cloud seek queued before
