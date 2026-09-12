@@ -92,14 +92,7 @@ function RootSystemChrome() {
     });
   }, [backgroundColor]);
 
-  return (
-    <StatusBar
-      style={isDark ? "light" : "dark"}
-      hidden={false}
-      translucent={false}
-      backgroundColor={backgroundColor}
-    />
-  );
+  return <StatusBar style={isDark ? "light" : "dark"} hidden={false} />;
 }
 
 function LayoutInner() {

@@ -7,7 +7,6 @@
     "orientation": "portrait",
     "scheme": "simple-syncing-audiobook",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "android": {
       "versionCode": 3,
       "adaptiveIcon": {
@@ -24,7 +23,10 @@
       "./plugins/withReleaseSigning"
     ],
     "ios": {
-      "bundleIdentifier": "com.simplesyncing.audiobook"
+      "bundleIdentifier": "com.simplesyncing.audiobook",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
     }
   }
 }

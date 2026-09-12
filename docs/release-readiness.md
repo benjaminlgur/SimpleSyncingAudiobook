@@ -8,23 +8,23 @@ change signing identities between releases installed by the same users.
 
 Set these GitHub Actions repository secrets:
 
-| Secret | Value |
-| --- | --- |
-| `CONVEX_DEPLOY_KEY_PROD` | Production Convex deploy key |
-| `ANDROID_KEYSTORE_BASE64` | Base64 of the existing release/upload keystore |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
-| `ANDROID_KEY_ALIAS` | Release key alias |
-| `ANDROID_KEY_PASSWORD` | Release key password |
-| `WINDOWS_CERTIFICATE` | Base64 PFX containing the Windows signing certificate and key |
-| `WINDOWS_CERTIFICATE_PASSWORD` | PFX password |
-| `APPLE_CERTIFICATE` | Base64 Developer ID Application certificate and private key |
-| `APPLE_CERTIFICATE_PASSWORD` | Certificate export password |
-| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application signing identity |
-| `APPLE_ID` | Apple developer account email |
-| `APPLE_PASSWORD` | App-specific password used by notarization |
-| `APPLE_TEAM_ID` | Apple developer team ID |
-| `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater signing private key |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Updater key password, if encrypted |
+| Secret                               | Value                                                         |
+| ------------------------------------ | ------------------------------------------------------------- |
+| `CONVEX_DEPLOY_KEY_PROD`             | Production Convex deploy key                                  |
+| `ANDROID_KEYSTORE_BASE64`            | Base64 of the existing release/upload keystore                |
+| `ANDROID_KEYSTORE_PASSWORD`          | Keystore password                                             |
+| `ANDROID_KEY_ALIAS`                  | Release key alias                                             |
+| `ANDROID_KEY_PASSWORD`               | Release key password                                          |
+| `WINDOWS_CERTIFICATE`                | Base64 PFX containing the Windows signing certificate and key |
+| `WINDOWS_CERTIFICATE_PASSWORD`       | PFX password                                                  |
+| `APPLE_CERTIFICATE`                  | Base64 Developer ID Application certificate and private key   |
+| `APPLE_CERTIFICATE_PASSWORD`         | Certificate export password                                   |
+| `APPLE_SIGNING_IDENTITY`             | Full Developer ID Application signing identity                |
+| `APPLE_ID`                           | Apple developer account email                                 |
+| `APPLE_PASSWORD`                     | App-specific password used by notarization                    |
+| `APPLE_TEAM_ID`                      | Apple developer team ID                                       |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Tauri updater signing private key                             |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Updater key password, if encrypted                            |
 
 Set repository variables `HOSTED_CONVEX_URL` and `TAURI_UPDATER_PUBLIC_KEY`.
 `RELEASE_PLATFORMS` selects a comma-separated subset of `android,linux,windows,macos`;
@@ -81,21 +81,29 @@ by these source changes. Configure the services before publishing.
 
 ## Expo compatibility decision
 
-Mobile is upgraded from Expo SDK 52 to **54.0.37**, React Native **0.81.5**, and
-React **19.1.0**. SDK 54 is the last Expo version supporting the legacy native
-architecture used by Track Player 4. Reanimated stays on compatible **3.19.5**;
-its Expo version-check exclusion is intentional. Track Player has a checked-in
-pnpm patch for React Native's stricter nullable Bundle annotations. Legacy file
-system APIs are imported explicitly from `expo-file-system/legacy`.
+The published **v1.0.2** release uses Expo SDK 54. The upgrade branch moves to
+**Expo 57.0.22**, **React Native 0.86.3**, and **React 19.2.3**, with Reanimated
+**4.5.1** and Worklets **0.10.1**. Expo's new architecture is enabled by default.
+TypeScript moves to the Expo-recommended **6.0.3**; explicit ambient types and
+CSS declarations replace its previous implicit type discovery.
 
-SDK 57 is current, but migration to it remains a separate playback-engine
-replacement: Track Player 5 changes the API and license, and Expo's playlist API
-does not expose the same lock-screen controls. Do not remove the architecture
-setting or replace dependency versions alone.
+Track Player **4.1.2** remains the latest Apache-licensed version. Its native
+compatibility is upgraded with a checked-in pnpm patch: asynchronous Android
+React methods return JVM `void` through a Unit-returning coroutine helper, and
+service events use `ReactApplication.reactHost.currentReactContext`. The patch
+also retains the nullable Bundle fixes. This uses React Native's legacy-module
+interop; it is not a Track Player 5 migration. The existing promise-based seek
+and background-service APIs remain in use.
 
-References: [Expo SDK 54](https://expo.dev/changelog/sdk-54),
+Track Player 5 changes both API and license. Its terms require a commercial
+license for organizational use, including nonprofits. The upgrade branch keeps
+the Apache player rather than adding those terms to the application. iOS audio
+background mode is now explicit in app configuration. Legacy filesystem calls
+remain imported from `expo-file-system/legacy`.
+
+References: [Expo SDK 57](https://expo.dev/changelog/sdk-57),
 [Track Player's architecture and license](https://github.com/doublesymmetry/react-native-track-player),
-[Reanimated compatibility](https://docs.swmansion.com/react-native-reanimated/docs/3.x/guides/compatibility/),
+[React Native's new architecture](https://docs.expo.dev/guides/new-architecture/),
 [Tauri updater signing](https://v2.tauri.app/plugin/updater/).
 
 ## Verification
@@ -122,6 +130,48 @@ formatter checks, three Rust tests, clean Expo Android prebuild, and Track Playe
 native Kotlin compilation. The generated Gradle release task was also checked to
 reject missing signing credentials. A subsequent desktop restore-cancellation
 regression test passed, bringing the client/shared/backend test total to 79.
-Full Android debug assembly remains unverified: repeated attempts encountered
-Windows Gradle 8.14.3 cache errors moving temporary transform workspaces. Run
-native assembly on a clean CI runner before distributing a release.
+The September 12 v1.0.2 release subsequently passed native Android APK/AAB and
+Linux builds in GitHub Actions. The downloaded APK and AAB matched the project's
+release certificate, the Linux updater signature verified, and the public
+updater manifest resolves v1.0.2. A version-script regression test on main brings
+the automated test total to 80.
+
+For the Expo 57 branch, `apps/mobile/native-tests/playerSmoke.ts` exercises the
+actual native player rather than mocks. It checks a cloud seek queued before
+setup, chapter/position acknowledgement, advancing playback, speed, pause,
+native state/progress events, chapter switching, and saving on stop. Prepare a
+disposable project with `node scripts/prepare-native-player-smoke.mjs`. In
+`.native-validation/player-smoke`, run Expo prebuild and an Android debug build,
+then start Metro from that same directory and launch the generated smoke app.
+Look for `PLAYER_SMOKE: PASS` in Android logcat. The fixture uses a generated
+silent WAV, memory storage, a separate application ID, and no Convex connection.
+
+Expo Doctor still flags the upstream `react-native-track-player` package as
+unsupported on the new architecture. Its registry metadata does not describe
+this local patch, so the warning remains visible and native playback validation
+is required when changing React Native or the player patch.
+
+On Windows, Android's bundled Ninja 1.10.2 can fail in Worklets with
+`build.ninja still dirty after 100 tries`. The optional
+`scripts/windows-native-build.init.gradle` selects a newer Ninja executable and
+puts CMake intermediates in shorter paths inside the Android project. Set
+`NINJA_PATH` to a Ninja 1.12+ executable and add
+`-I ../../../scripts/windows-native-build.init.gradle` to the Gradle command
+when running from the generated Android directory. This leaves the global SDK
+installation unchanged. See the upstream
+[Windows build guide](https://docs.swmansion.com/react-native-reanimated/docs/guides/building-on-windows/).
+
+Expo 57 validation on September 12, 2026 passed `pnpm verify` (80 tests), the
+dependency version check, Android prebuild, and an x86_64 Android debug build
+using Ninja 1.13.2 with the Windows override. Every compiled asynchronous player
+method was checked for a JVM `void` return. The native smoke test passed on an
+Android API 36 emulator with Fabric enabled, including actual seeks, playback,
+speed changes, pause, event delivery, and saved progress. The release task also
+rejected missing signing credentials as intended. Expo Doctor passes 20 of 21
+checks, with only the documented upstream player metadata warning remaining.
+The regular app also reached its sign-in and connection screen on the emulator.
+
+If Windows binds Metro only to IPv6 localhost, start it using
+`node --dns-result-order=ipv4first ../../node_modules/expo/bin/cli start --localhost --max-workers 2`
+from the disposable app directory, and use `adb reverse tcp:8081 tcp:8081` for the
+test emulator. This avoids changing system network settings.

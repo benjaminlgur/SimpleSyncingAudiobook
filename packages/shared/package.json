@@ -9,14 +9,14 @@
     "./react": "./src/react.ts"
   },
   "peerDependencies": {
-    "react": "^19.1.0",
+    "react": "^19.2.3",
     "convex": "^1.45.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "typescript": "~6.0.3"
   },
   "dependencies": {
     "@noble/hashes": "1.8.0"

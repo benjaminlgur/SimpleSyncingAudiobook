@@ -336,4 +336,4 @@ Release CI builds Windows, Linux, macOS (ARM and Intel), and signed Android APK/
 Physical-device audio routing and OS notification behavior still need device QA;
 compile and mocked native-service tests cannot certify those behaviors.
 
-See [release configuration and compatibility notes](docs/release-readiness.md) for signing secrets, update endpoints, crash reporting, and the Expo SDK 54 migration boundary.
+See [release configuration and compatibility notes](docs/release-readiness.md) for signing secrets, update endpoints, crash reporting, and the Expo SDK 57 player compatibility patch.

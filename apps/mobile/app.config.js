@@ -1,8 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const appJson = require("./app.json");
-
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
 
@@ -33,8 +31,8 @@ const workspaceRoot = path.resolve(__dirname, "../..");
 parseEnvFile(path.join(workspaceRoot, ".env.local"));
 parseEnvFile(path.join(workspaceRoot, ".env"));
 
-module.exports = () => ({
-  ...appJson.expo,
+module.exports = ({ config }) => ({
+  ...config,
   runtimeVersion: { policy: "fingerprint" },
   updates: process.env.EXPO_UPDATE_URL
     ? {
@@ -44,7 +42,7 @@ module.exports = () => ({
       }
     : { enabled: false },
   plugins: [
-    ...appJson.expo.plugins,
+    ...(config.plugins ?? []),
     [
       "@sentry/react-native/expo",
       {
@@ -54,7 +52,7 @@ module.exports = () => ({
     ],
   ],
   extra: {
-    ...(appJson.expo.extra ?? {}),
+    ...(config.extra ?? {}),
     hostedConvexUrl: process.env.EXPO_PUBLIC_HOSTED_CONVEX_URL ?? "",
   },
 });

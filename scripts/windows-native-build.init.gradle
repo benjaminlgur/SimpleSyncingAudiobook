@@ -1,0 +1,24 @@
+// Optional Windows build override. Use a Ninja >= 1.12 executable via NINJA_PATH.
+// Short CMake output paths avoid pnpm's deeply nested package directories.
+if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
+    throw new GradleException('This build override is only intended for Windows')
+}
+
+def ninjaPath = System.getenv('NINJA_PATH')
+if (!ninjaPath || !new File(ninjaPath).isFile()) {
+    throw new GradleException('Set NINJA_PATH to a Ninja >= 1.12 executable')
+}
+def ninja = new File(ninjaPath).absolutePath.replace('\\', '/')
+
+gradle.beforeProject { project ->
+    ['com.android.application', 'com.android.library'].each { pluginId ->
+        project.pluginManager.withPlugin(pluginId) {
+            def android = project.extensions.getByName('android')
+            android.defaultConfig.externalNativeBuild.cmake.arguments.add(
+                "-DCMAKE_MAKE_PROGRAM=${ninja}".toString()
+            )
+            android.externalNativeBuild.cmake.buildStagingDirectory =
+                new File(project.rootProject.projectDir, ".cxx-short/${project.name}")
+        }
+    }
+}
