@@ -158,7 +158,7 @@ export class SyncEngine {
           revision: remote.revision,
           dirty: local.operationId !== remote.operationId,
         };
-        void this.persistLocally();
+        void this.confirmRemotePosition(this.state.pending);
         return this.state.pending;
       }
       if (local && (local.dirty !== false || this.isPlaying)) {
@@ -180,7 +180,7 @@ export class SyncEngine {
     } else if (remote && (!local || remote.updatedAt > local.updatedAt)) {
       this.state.pending = { ...remote, audiobookId: this.audiobookId };
     }
-    void this.persistLocally();
+    let applying: Promise<void> | undefined;
     if (
       this.state.pending !== local &&
       this.state.pending?.dirty === false &&
@@ -188,9 +188,36 @@ export class SyncEngine {
         local.chapterIndex !== this.state.pending.chapterIndex ||
         local.positionMs !== this.state.pending.positionMs)
     ) {
-      void this.applyToPlayer(this.state.pending);
+      applying = this.applyToPlayer(this.state.pending);
+    }
+    if (
+      remote?.revision !== undefined &&
+      this.state.pending?.revision === remote.revision &&
+      this.state.pending.dirty === false
+    ) {
+      void this.confirmRemotePosition(this.state.pending, applying);
+    } else {
+      void this.persistLocally();
     }
     return this.state.pending;
+  }
+
+  private async confirmRemotePosition(
+    position: PlaybackPosition,
+    applying?: Promise<void>,
+  ) {
+    await applying;
+    await this.persistLocally();
+    if (
+      this.state.pending === position &&
+      position.dirty === false &&
+      !this.state.conflict &&
+      !this.applyingPosition &&
+      !this.applicationFailed &&
+      !this.localSaveFailed
+    ) {
+      this.setStatus("synced");
+    }
   }
 
   private setConflict(remote: PlaybackPosition) {

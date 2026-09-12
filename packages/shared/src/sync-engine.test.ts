@@ -328,3 +328,57 @@ test("scrubbing saves locally immediately and coalesces remote writes", async ()
   );
   vi.useRealTimers();
 });
+
+test("restored clean progress reports synced after a matching cloud confirmation without another write", async () => {
+  const saved = {
+    ...position(30000, 10),
+    revision: 4,
+    operationId: "saved-op",
+    dirty: false,
+  };
+  data.set("audiobook_sync_book", JSON.stringify(saved));
+  const push = vi.fn(async () => accepted);
+  const engine = create(push);
+  await engine.initialize();
+  expect(engine.getState().status).toBe("idle");
+  engine.reconcilePosition(saved);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(engine.getState().status).toBe("synced");
+  expect(push).not.toHaveBeenCalled();
+});
+
+test("cloud confirmation does not hide a failed native seek", async () => {
+  const engine = new SyncEngine(
+    "book",
+    {
+      getItem: async () => null,
+      setItem: async () => {},
+      removeItem: async () => {},
+    },
+    async () => accepted,
+    async () => {
+      throw new Error("Native seek failed");
+    },
+  );
+  engines.push(engine);
+  engine.reconcilePosition({ ...position(30000, 10), revision: 4 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(engine.getState()).toMatchObject({
+    status: "error",
+    lastError: "Native seek failed",
+  });
+});
+
+test("a delayed cloud confirmation cannot mark a newer local edit synced", async () => {
+  const engine = create();
+  engine.reconcilePosition({ ...position(30000, 10), revision: 4 });
+  await vi.advanceTimersByTimeAsync(0);
+  engine.reportError("Offline");
+  engine.reconcilePosition({ ...position(30000, 10), revision: 4 });
+  engine.updatePosition(0, 45000);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(engine.getState()).toMatchObject({
+    status: "error",
+    pending: { positionMs: 45000, dirty: true },
+  });
+});

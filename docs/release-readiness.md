@@ -194,7 +194,7 @@ USB forwarding were cleaned up. The separate smoke app remains installed.
 
 The initial launch exceeded the smoke test's polling deadline despite continuously
 advancing native progress events. Its cause remains unestablished; the two later
-passes do not establish that the initial timing issue is resolved. The physical
+passes do not establish that the initial timing issue is resolved. These initial
 tests used silent audio and stubbed cloud persistence. Audible output, real
 cross-device cloud sync, screen lock, Bluetooth, long-duration battery/Doze
 behavior, and a release-signed upgrade were not exercised. Local evidence is
@@ -233,3 +233,55 @@ If Windows binds Metro only to IPv6 localhost, start it using
 `node --dns-result-order=ipv4first ../../node_modules/expo/bin/cli start --localhost --max-workers 2`
 from the disposable app directory, and use `adb reverse tcp:8081 tcp:8081` for the
 test emulator. This avoids changing system network settings.
+
+### Real cross-device validation
+
+Later on September 12, the Windows native app and the physical Samsung phone
+ran the production library/player screens against the real Convex development
+deployment in self-hosted mode. Separate app profiles and generated test books
+kept this work isolated from the user's installed app and listening library.
+The phone used the existing ARM64 smoke APK with the production app routes;
+its disposable Expo bootstrap supplied an explicit route context.
+
+This testing found and fixed four problems:
+
+- Desktop registration callbacks changed during connection notifications,
+  restarting pending registrations until Convex closed the overloaded socket.
+- The shared connection lifecycle briefly denied writes from child effects
+  immediately after reporting that the connection was ready.
+- Folder position conversion leaked local cache fields into cloud mutations,
+  overwriting the cloud audiobook ID and causing validation failures.
+- Clean restored progress could retain a misleading "Not synced" label. Cloud
+  confirmation now updates that status after persistence and any required seek,
+  without masking errors or newer local edits.
+
+The final checks passed:
+
+- Both devices computed the same recording fingerprint and cloud identity.
+- Windows' chapter 1 / 0:30 resumed on Android; Android played and paused at
+  55.047 seconds, and Windows received that position while its player was hidden
+  by the library. A subsequent chapter 2 / 0:30 handoff also passed.
+- With only the phone test app's sync transport blocked, its local 1:00 position
+  stayed unsynced while Windows saved 1:30. Reconnecting showed both positions
+  in the conflict UI; "Use other device" moved native playback to 1:30 without
+  overwriting the server revision. A separate stale-revision mutation with a
+  future client clock was also rejected.
+- An M4B with two embedded chapters on Windows and one track on Android resumed
+  at the same absolute offset. Rewinding on Android crossed the desktop's chapter
+  boundary correctly. Both devices preserved the position across restart.
+- Final fresh launches showed the correct paused 0:30 position and "Synced"
+  without creating another server revision.
+
+Validation passed 92 tests, the full project typecheck, changed-file lint and
+format checks, the production desktop bundle, and the Windows native debug
+build. Test processes and USB forwarding were stopped. Both temporary cloud
+books were removed after checking their IDs, names and fingerprints, other
+books matched the pre-cleanup snapshot, and the temporary development access
+key was revoked. The separate test APK/profile and generated local media remain.
+
+Google-authenticated hosted mode, screen lock, Bluetooth, long-duration battery
+or Doze behavior, and a release-signed upgrade were not covered by this session.
+The earlier initial smoke-test timing observation remains recorded above.
+Evidence is in `.native-validation/cross-device/RESULTS.md` and
+`.native-validation/physical-android/cross-device/RESULTS.md`. These changes are
+committed on the Expo 57 upgrade branch and remain unreleased.
