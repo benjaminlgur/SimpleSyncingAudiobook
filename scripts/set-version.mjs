@@ -16,9 +16,13 @@ for (const file of [
 ]) {
   const path = resolve(root, file);
   const data = JSON.parse(readFileSync(path, "utf8"));
-  const previousVersion = (data.expo ?? data).version;
-  (data.expo ?? data).version = version;
-  if (data.expo?.android && previousVersion !== version)
+  const versionTarget = file === "apps/mobile/app.json" ? data.expo : data;
+  const previousVersion = versionTarget.version;
+  versionTarget.version = version;
+  // package.json also has an `expo` field for install settings; it isn't app.json.
+  if (file === "apps/mobile/package.json" && data.expo)
+    delete data.expo.version;
+  if (file === "apps/mobile/app.json" && previousVersion !== version)
     data.expo.android.versionCode = (data.expo.android.versionCode ?? 0) + 1;
   writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
 }

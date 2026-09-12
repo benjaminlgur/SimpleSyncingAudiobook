@@ -41,8 +41,8 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.release_tag }}
 
-      - name: Verify package version matches release tag
-        run: node -e "if ('v' + require('./apps/mobile/package.json').version !== process.env.RELEASE_TAG) process.exit(1)"
+      - name: Verify Android app version matches release tag
+        run: node -e "if ('v' + require('./apps/mobile/app.json').expo.version !== process.env.RELEASE_TAG) process.exit(1)"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
