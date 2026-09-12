@@ -42,6 +42,11 @@ and AAB signatures. Missing release credentials fail the Gradle release task;
 debug builds continue to work with a development key. The version-bump script
 increments Android's `versionCode` when the app version changes.
 
+Android packaging uses a reusable workflow with a 4 GB heap, 2 GB metadata limit,
+and two Gradle workers. It can also be dispatched manually with `release_tag` to
+retry an existing draft release without moving the tag or rebuilding desktop
+installers. The retry checks out that exact tag and refuses published releases.
+
 The pipeline cannot make an old debug-signed APK upgrade-compatible with a
 release-signed APK. Verify the installed certificate before distributing an
 upgrade to existing users; imported audio must be preserved before any uninstall.

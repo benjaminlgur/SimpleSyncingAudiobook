@@ -1,0 +1,137 @@
+name: Android release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag to build
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      NODE_ENV: production
+      HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
+      EXPO_UPDATE_URL: ${{ vars.EXPO_UPDATE_URL }}
+      EXPO_PUBLIC_SENTRY_DSN: ${{ vars.MOBILE_SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.MOBILE_SENTRY_PROJECT }}
+      SENTRY_DISABLE_AUTO_UPLOAD: ${{ vars.MOBILE_SENTRY_DSN == '' && 'true' || 'false' }}
+    steps:
+      - name: Validate draft release target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Provide an existing version tag"; exit 1; }
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" || { echo "Only draft releases can receive rebuilt installers"; exit 1; }
+
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+
+      - name: Verify package version matches release tag
+        run: node -e "if ('v' + require('./apps/mobile/package.json').version !== process.env.RELEASE_TAG) process.exit(1)"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cache Gradle dependencies
+        uses: gradle/actions/setup-gradle@v6.3.0
+        with:
+          cache-read-only: false
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prod=false
+
+      - name: Validate hosted production URL
+        shell: bash
+        run: |
+          if [ -z "$HOSTED_CONVEX_URL" ]; then
+            echo "Missing GitHub Actions variable HOSTED_CONVEX_URL"
+            echo "Set it to your production hosted Convex URL, for example:"
+            echo "https://effervescent-squid-842.convex.cloud"
+            exit 1
+          fi
+
+      - name: Prepare Android release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing ANDROID_KEYSTORE_BASE64"; exit 1; }
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Generate native Android project
+        working-directory: apps/mobile
+        env:
+          EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
+        run: npx expo prebuild --platform android --clean
+
+      - name: Build signed APK and AAB
+        working-directory: apps/mobile/android
+        env:
+          EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          EXPO_PUBLIC_SENTRY_DSN: ${{ vars.MOBILE_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: ./gradlew assembleRelease bundleRelease --no-daemon --max-workers=2 '-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=2048m'
+
+      - name: Verify Android signatures
+        shell: bash
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$apksigner" verify --verbose apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          jarsigner -verify apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Remove temporary keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Rename APK
+        run: |
+          mv apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+             apps/mobile/android/app/build/outputs/apk/release/SimpleSyncingAudiobook-${{ inputs.release_tag }}.apk
+
+      - name: Upload APK to release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          draft: true
+          files: |
+            apps/mobile/android/app/build/outputs/apk/release/SimpleSyncingAudiobook-${{ inputs.release_tag }}.apk
+            apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
