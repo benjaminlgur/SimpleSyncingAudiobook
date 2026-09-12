@@ -32,6 +32,7 @@ jobs:
         run: node scripts/validate-release.cjs
         env:
           RELEASE_PLATFORMS: ${{ vars.RELEASE_PLATFORMS }}
+          DESKTOP_SIGNING_MODE: ${{ vars.DESKTOP_SIGNING_MODE || 'signed' }}
           HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
           CONVEX_DEPLOY_KEY_PROD: ${{ secrets.CONVEX_DEPLOY_KEY_PROD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -109,6 +110,7 @@ jobs:
       - deploy-backend-prod
     env:
       HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
+      DESKTOP_SIGNING_MODE: ${{ vars.DESKTOP_SIGNING_MODE || 'signed' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.validate.outputs.desktop_matrix) }}
@@ -131,7 +133,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ startsWith(matrix.platform, 'macos-') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -153,7 +155,7 @@ jobs:
           fi
 
       - name: Import Windows signing certificate
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.DESKTOP_SIGNING_MODE == 'signed'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -167,17 +169,17 @@ jobs:
             "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
           } finally { Remove-Item -LiteralPath $certificatePath -ErrorAction SilentlyContinue }
 
-      - name: Configure signed desktop release and updates
+      - name: Configure desktop installers and signed updates
         run: node scripts/configure-desktop-release.cjs
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ env.DESKTOP_SIGNING_MODE == 'signed' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ env.DESKTOP_SIGNING_MODE == 'signed' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ env.DESKTOP_SIGNING_MODE == 'unsigned' && '-' || secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ env.DESKTOP_SIGNING_MODE == 'signed' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ env.DESKTOP_SIGNING_MODE == 'signed' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ env.DESKTOP_SIGNING_MODE == 'signed' && secrets.APPLE_TEAM_ID || '' }}
 
       - name: Test native audio helpers
         working-directory: apps/desktop/src-tauri
@@ -195,12 +197,6 @@ jobs:
           SENTRY_RELEASE: ${{ github.ref_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.release_id }}

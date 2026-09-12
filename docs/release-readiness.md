@@ -28,9 +28,13 @@ Set these GitHub Actions repository secrets:
 
 Set repository variables `HOSTED_CONVEX_URL` and `TAURI_UPDATER_PUBLIC_KEY`.
 `RELEASE_PLATFORMS` selects a comma-separated subset of `android,linux,windows,macos`;
-when absent, all four are required. Signing checks apply to every selected
-platform. The initial v1.0.2 release selects `android,linux` while Windows and macOS
-certificates are pending. Linux packages use the signed Tauri updater artifacts.
+when absent, all four are selected. `DESKTOP_SIGNING_MODE` defaults to `signed`,
+which requires the Windows and Apple credentials for selected platforms. Set it
+to `unsigned` to build Windows installers without Authenticode and macOS
+installers with an ad-hoc signature and no notarization. Users will encounter OS
+security prompts. Android release signing and Tauri updater signatures remain
+mandatory in either mode. The initial v1.0.2 and v1.0.3 publications selected
+`android,linux`; later desktop artifacts can be added without moving those tags.
 Use a certificate compatible with the configured Windows certificate-store
 signing flow; hardware-backed signing services need their provider's signing
 integration instead of an exportable PFX.
@@ -46,6 +50,14 @@ Android packaging uses a reusable workflow with a 4 GB heap, 2 GB metadata limit
 and two Gradle workers. It can also be dispatched manually with `release_tag` to
 retry an existing draft release without moving the tag or rebuilding desktop
 installers. The retry checks out that exact tag and refuses published releases.
+
+The `Desktop release artifacts` workflow accepts an existing `release_tag` and
+builds Windows x64, Apple Silicon, and Intel Mac installers in unsigned mode.
+It checks out app code from the tag and packaging scripts from the workflow
+commit, records both commit IDs, and uploads CI artifacts for verification.
+After checking signatures and hashes, add the new assets to that release and
+merge their updater entries into its existing `latest.json`, preserving the
+other platforms. This workflow does not overwrite published assets itself.
 
 The pipeline cannot make an old debug-signed APK upgrade-compatible with a
 release-signed APK. Verify the installed certificate before distributing an
@@ -300,6 +312,6 @@ verified. AppImage, Debian, and RPM updater signatures verified against the
 existing public key, and modified packages were rejected. The public latest
 release and updater endpoint both resolve to v1.0.3.
 
-Windows and macOS installers remain excluded because their release signing is
-not configured. The device-test limitations above still apply; artifact
+Windows and macOS installers were excluded from the initial publication by the
+workflow's certificate requirement. The device-test limitations above still apply; artifact
 verification does not add a release-signed upgrade installation test.

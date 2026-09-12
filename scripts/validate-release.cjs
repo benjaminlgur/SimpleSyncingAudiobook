@@ -1,4 +1,6 @@
 const fs = require("node:fs");
+const { desktopSigningMode } = require("./desktop-signing.cjs");
+const signingMode = desktopSigningMode(process.env);
 const platforms = (
   process.env.RELEASE_PLATFORMS || "android,linux,windows,macos"
 )
@@ -20,9 +22,9 @@ if (platforms.includes("android"))
     "ANDROID_KEY_ALIAS",
     "ANDROID_KEY_PASSWORD",
   );
-if (platforms.includes("windows"))
+if (platforms.includes("windows") && signingMode === "signed")
   required.push("WINDOWS_CERTIFICATE", "WINDOWS_CERTIFICATE_PASSWORD");
-if (platforms.includes("macos"))
+if (platforms.includes("macos") && signingMode === "signed")
   required.push(
     "APPLE_CERTIFICATE",
     "APPLE_CERTIFICATE_PASSWORD",
@@ -42,7 +44,7 @@ const desktopMatrix = {
     ...(platforms.includes("macos")
       ? [
           { platform: "macos-latest", args: "--target aarch64-apple-darwin" },
-          { platform: "macos-latest", args: "--target x86_64-apple-darwin" },
+          { platform: "macos-15-intel", args: "--target x86_64-apple-darwin" },
         ]
       : []),
   ],

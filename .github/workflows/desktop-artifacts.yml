@@ -1,0 +1,127 @@
+name: Desktop release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build unsigned Windows and ad-hoc macOS installers
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: darwin-aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: darwin-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      DESKTOP_SIGNING_MODE: unsigned
+      VITE_HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate existing release target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Provide an existing version tag"; exit 1; }
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName
+
+      - name: Check out exact released app source
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Check out current packaging tools
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate version and hosted backend
+        run: |
+          node -e "if ('v' + require('./apps/desktop/src-tauri/tauri.conf.json').version !== process.env.RELEASE_TAG) process.exit(1); const u = new URL(process.env.VITE_HOSTED_CONVEX_URL); if (u.protocol !== 'https:' || !u.hostname.endsWith('.convex.cloud')) process.exit(1)"
+
+      - name: Configure unsigned installers and signed updates
+        run: node release-tools/scripts/configure-desktop-release.cjs
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Test native audio helpers
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --lib --locked --target ${{ matrix.target }}
+
+      - name: Build installers
+        id: build
+        uses: tauri-apps/tauri-action@action-v0.5.25
+        env:
+          VITE_SENTRY_DSN: ${{ vars.DESKTOP_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ vars.DESKTOP_SENTRY_DSN != '' && secrets.SENTRY_AUTH_TOKEN || '' }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.DESKTOP_SENTRY_PROJECT }}
+          SENTRY_RELEASE: ${{ inputs.release_tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        with:
+          projectPath: apps/desktop
+          args: --target ${{ matrix.target }}
+          retryAttempts: 1
+
+      - name: Verify macOS app and disk image integrity
+        if: runner.os == 'macOS'
+        run: |
+          for app in apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+          done
+          for dmg in apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            hdiutil verify "$dmg"
+          done
+
+      - name: Stage installers and provenance
+        run: node release-tools/scripts/stage-desktop-artifacts.cjs
+        env:
+          ARTIFACT_PATHS: ${{ steps.build.outputs.artifactPaths }}
+          ARTIFACT_PLATFORM: ${{ matrix.name }}
+          PACKAGING_COMMIT: ${{ github.sha }}
+
+      - name: Upload installers for verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: desktop-artifacts/*
+          if-no-files-found: error
