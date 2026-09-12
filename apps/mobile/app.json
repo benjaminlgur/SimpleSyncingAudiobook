@@ -2,13 +2,13 @@
   "expo": {
     "name": "Simple Syncing Audiobook",
     "slug": "simple-syncing-audiobook",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "scheme": "simple-syncing-audiobook",
     "userInterfaceStyle": "automatic",
     "android": {
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

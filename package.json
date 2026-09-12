@@ -41,7 +41,7 @@
       "react-native-track-player@4.1.2": "patches/react-native-track-player@4.1.2.patch"
     }
   },
-  "version": "1.0.2",
+  "version": "1.0.3",
   "dependencies": {
     "@auth/core": "0.37.0",
     "@convex-dev/auth": "^0.0.91",
