@@ -315,3 +315,20 @@ release and updater endpoint both resolve to v1.0.3.
 Windows and macOS installers were excluded from the initial publication by the
 workflow's certificate requirement. The device-test limitations above still apply; artifact
 verification does not add a release-signed upgrade installation test.
+
+Later the same day, unsigned Windows x64 EXE/MSI installers and ad-hoc signed,
+unnotarized macOS DMGs for Apple Silicon and Intel were added to v1.0.3. The app
+source remains tag commit `937dad6`; packaging used commit `6ab8b0e`. All three
+native build/test jobs passed, as did macOS app-signature and disk-image checks.
+Inspection of the downloaded Mac archives confirmed their app identifier,
+version, and respective ARM64/x86_64 binaries. Windows installers report version
+1.0.3 and have no Authenticode signature.
+
+All four new updater signatures verified against the existing public key, and
+modified packages were rejected. The ten added assets matched GitHub's SHA-256
+digests. The published release now has 19 assets, and its public updater manifest
+has 11 entries covering Linux, Windows, and both Mac architectures. Original
+Android/Linux packages and signatures are unchanged. The packaging changes also
+passed the full verification suite with 97 tests and workflow validation.
+Windows/macOS installation, upgrade, and OS security-prompt flows were not
+exercised; the unsigned/ad-hoc installers can trigger platform security prompts.
