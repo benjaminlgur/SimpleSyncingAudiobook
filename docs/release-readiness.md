@@ -283,5 +283,23 @@ Google-authenticated hosted mode, screen lock, Bluetooth, long-duration battery
 or Doze behavior, and a release-signed upgrade were not covered by this session.
 The earlier initial smoke-test timing observation remains recorded above.
 Evidence is in `.native-validation/cross-device/RESULTS.md` and
-`.native-validation/physical-android/cross-device/RESULTS.md`. These changes are
-committed on the Expo 57 upgrade branch and remain unreleased.
+`.native-validation/physical-android/cross-device/RESULTS.md`.
+
+### v1.0.3 publication
+
+The Expo 57 upgrade and cross-device fixes were merged into `main` and published
+as [v1.0.3](https://github.com/benjaminlgur/SimpleSyncingAudiobook/releases/tag/v1.0.3)
+on September 12, 2026, from commit `937dad6`. The complete release workflow passed,
+including production Convex deployment, Linux native tests and packages, and
+the signed Android APK and app bundle.
+
+All nine downloaded assets matched GitHub's SHA-256 digests. The Android APK
+reports version 1.0.3 / version code 4, includes all four Android architectures,
+and uses the same signing certificate as v1.0.2. The app bundle signature also
+verified. AppImage, Debian, and RPM updater signatures verified against the
+existing public key, and modified packages were rejected. The public latest
+release and updater endpoint both resolve to v1.0.3.
+
+Windows and macOS installers remain excluded because their release signing is
+not configured. The device-test limitations above still apply; artifact
+verification does not add a release-signed upgrade installation test.
