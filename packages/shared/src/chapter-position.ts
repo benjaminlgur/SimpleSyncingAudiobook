@@ -15,7 +15,11 @@ export function toSyncPosition(
   chapters: ChapterInfo[],
   position: Position,
 ): Position {
-  if (!isSingleFile(chapters)) return position;
+  if (!isSingleFile(chapters))
+    return {
+      chapterIndex: position.chapterIndex,
+      positionMs: position.positionMs,
+    };
   return {
     chapterIndex: 0,
     positionMs:
@@ -27,7 +31,11 @@ export function fromSyncPosition(
   chapters: ChapterInfo[],
   position: Position,
 ): Position {
-  if (!isSingleFile(chapters)) return position;
+  if (!isSingleFile(chapters))
+    return {
+      chapterIndex: position.chapterIndex,
+      positionMs: position.positionMs,
+    };
   const absoluteMs = position.positionMs;
   let chapterIndex = 0;
   for (let i = 0; i < chapters.length; i++) {

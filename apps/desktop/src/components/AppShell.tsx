@@ -334,21 +334,32 @@ export function AppShell({
     persistLibrary(updated);
   };
 
-  const updateBookConvexId = (book: LocalAudiobook, convexId: string) => {
-    const updated = library.map((b) =>
-      b.name === book.name && b.checksum === book.checksum
-        ? { ...b, convexId }
-        : b,
-    );
-    persistLibrary(updated);
-    if (
-      activeBook &&
-      activeBook.name === book.name &&
-      activeBook.checksum === book.checksum
-    ) {
-      setActiveBook({ ...activeBook, convexId });
-    }
-  };
+  // Connection notifications must not restart pending registration effects.
+  const updateBookConvexId = useCallback(
+    (book: LocalAudiobook, convexId: string) => {
+      const updated = library.map((b) =>
+        b.name === book.name && b.checksum === book.checksum
+          ? { ...b, convexId }
+          : b,
+      );
+      persistLibrary(updated);
+      if (
+        activeBook &&
+        activeBook.name === book.name &&
+        activeBook.checksum === book.checksum
+      ) {
+        setActiveBook({ ...activeBook, convexId });
+      }
+    },
+    [library, persistLibrary, activeBook],
+  );
+
+  const resolveActiveBookId = useCallback(
+    (convexId: string) => {
+      if (activeBook) updateBookConvexId(activeBook, convexId);
+    },
+    [activeBook, updateBookConvexId],
+  );
 
   const relocateBook = (book: LocalAudiobook, newFolderPath: string) => {
     const updated = library.map((b) =>
@@ -404,7 +415,7 @@ export function AppShell({
             convexUrl={convexUrl}
             storageScope={storageScope}
             onBack={() => setShowPlayer(false)}
-            onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
+            onConvexIdResolved={resolveActiveBookId}
             onRelocate={(newPath) => relocateBook(activeBook, newPath)}
           />
         </div>

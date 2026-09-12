@@ -1,8 +1,13 @@
 // @vitest-environment node
-import { createElement } from "react";
+import { createElement, useContext, useEffect } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, test, vi } from "vitest";
-import { CloudProvider, useCloudMutation, useCloudQuery } from "./react";
+import {
+  CloudContext,
+  CloudProvider,
+  useCloudMutation,
+  useCloudQuery,
+} from "./react";
 import { makeFunctionReference } from "convex/server";
 
 const mocks = vi.hoisted(() => ({
@@ -65,4 +70,32 @@ test("a disconnected websocket cannot leave imports waiting on an offline mutati
     renderer = create(app(true));
   });
   await expect(backgroundPush({ book: "book" })).rejects.toThrow("reconnect");
+});
+
+test("reconnecting allows registration from a child's readiness effect", async () => {
+  const failures: unknown[] = [];
+  function RegisterOnConnect() {
+    const { ready } = useContext(CloudContext);
+    const register = useCloudMutation(mutation);
+    useEffect(() => {
+      if (ready)
+        void register({ book: "book" }).catch((error) => failures.push(error));
+    }, [ready, register]);
+    return null;
+  }
+  const render = () =>
+    createElement(CloudProvider, {
+      ready: true,
+      children: createElement(RegisterOnConnect),
+    });
+  mocks.connected = false;
+  await act(async () => {
+    renderer = create(render());
+  });
+  mocks.connected = true;
+  await act(async () => {
+    renderer.update(render());
+  });
+  expect(failures).toEqual([]);
+  expect(mocks.mutation).toHaveBeenCalledTimes(1);
 });

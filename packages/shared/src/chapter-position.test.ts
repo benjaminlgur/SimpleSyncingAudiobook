@@ -27,3 +27,30 @@ test("separate-file chapters keep their original indices", () => {
     toSyncPosition(chapters, { chapterIndex: 1, positionMs: 1000 }),
   ).toEqual({ chapterIndex: 1, positionMs: 1000 });
 });
+
+test("folder position conversion cannot overwrite cloud identity or leak local fields", () => {
+  const chapters = [
+    { index: 0, filename: "1.mp3" },
+    { index: 1, filename: "2.mp3" },
+  ];
+  const local = {
+    audiobookId: "local-book",
+    chapterIndex: 1,
+    positionMs: 30000,
+    updatedAt: 123,
+    dirty: true,
+    revision: 2,
+  };
+  expect({
+    audiobookId: "cloud-book",
+    ...toSyncPosition(chapters, local),
+  }).toEqual({
+    audiobookId: "cloud-book",
+    chapterIndex: 1,
+    positionMs: 30000,
+  });
+  expect(fromSyncPosition(chapters, local)).toEqual({
+    chapterIndex: 1,
+    positionMs: 30000,
+  });
+});

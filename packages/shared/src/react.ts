@@ -3,7 +3,7 @@ import {
   createElement,
   useCallback,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useRef,
   type ReactNode,
 } from "react";
@@ -38,7 +38,9 @@ export function CloudProvider({
   const allowed = ready && connection.isWebSocketConnected;
   const current = useRef(allowed);
   current.current = allowed;
-  useEffect(() => {
+  // Commit access before descendant effects attempt registration or reconnect
+  // flushes. A passive cleanup can otherwise revoke it after the ready render.
+  useLayoutEffect(() => {
     current.current = allowed;
     return () => {
       current.current = false;
