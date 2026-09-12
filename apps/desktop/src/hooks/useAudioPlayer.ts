@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { ChapterInfo } from "@audiobook/shared";
-import { loadAudioFileAsBlob, revokeCurrentAudioBlob, FileNotFoundError } from "../lib/tauri-fs";
+import {
+  loadAudioFileAsBlob,
+  revokeCurrentAudioBlob,
+  FileNotFoundError,
+} from "../lib/tauri-fs";
+import { registerUpdatePreparation } from "../lib/updateLifecycle";
 
 export interface AudioPlayerState {
   isPlaying: boolean;
@@ -20,6 +25,7 @@ export interface AudioPlayerControls {
   seekTo: (ms: number) => void;
   seekBy: (deltaMs: number) => void;
   skipToChapter: (index: number, seekMs?: number) => Promise<void>;
+  restorePosition: (index: number, seekMs: number) => Promise<void>;
   nextChapter: () => void;
   prevChapter: () => void;
   setSpeed: (speed: number) => void;
@@ -32,7 +38,8 @@ interface UseAudioPlayerOptions {
   initialPositionMs?: number;
   onPositionUpdate?: (chapterIndex: number, positionMs: number) => void;
   onChapterChange?: (chapterIndex: number) => void;
-  onPause?: () => void;
+  onSeek?: () => void;
+  onPause?: () => void | Promise<void>;
   onPlay?: () => void;
 }
 
@@ -41,7 +48,7 @@ function isVirtualChapter(ch: ChapterInfo): boolean {
 }
 
 export function useAudioPlayer(
-  options: UseAudioPlayerOptions
+  options: UseAudioPlayerOptions,
 ): [AudioPlayerState, AudioPlayerControls] {
   const {
     folderPath,
@@ -50,6 +57,7 @@ export function useAudioPlayer(
     initialPositionMs = 0,
     onPositionUpdate,
     onChapterChange,
+    onSeek,
     onPause,
     onPlay,
   } = options;
@@ -90,9 +98,28 @@ export function useAudioPlayer(
     onPositionUpdate?.(index, Math.max(0, audio.currentTime * 1000 - offset));
   }, [chapters, onPositionUpdate]);
 
+  useEffect(
+    () =>
+      registerUpdatePreparation(async () => {
+        audioRef.current?.pause();
+        capturePosition();
+        await onPause?.();
+      }),
+    [capturePosition, onPause],
+  );
+
   const loadChapter = useCallback(
-    async (index: number, seekMs = 0, forcePlay = false, publish = true) => {
-      if (index < 0 || index >= chapters.length) return;
+    async (
+      index: number,
+      seekMs = 0,
+      forcePlay = false,
+      publish = true,
+      strict = false,
+    ) => {
+      if (index < 0 || index >= chapters.length) {
+        if (strict) throw new Error("Saved chapter is unavailable");
+        return;
+      }
       const request = ++loadRequestRef.current;
       loadingRef.current = true;
 
@@ -114,8 +141,15 @@ export function useAudioPlayer(
       if (!sameFile) {
         audio.pause();
         try {
-          const blobUrl = await loadAudioFileAsBlob(folderPath, chapter.filename);
-          if (request !== loadRequestRef.current) return;
+          const blobUrl = await loadAudioFileAsBlob(
+            folderPath,
+            chapter.filename,
+          );
+          if (request !== loadRequestRef.current) {
+            if (strict)
+              throw new Error("Saved position restore was superseded");
+            return;
+          }
           audio.src = blobUrl;
           audio.playbackRate = stateRef.current.playbackSpeed;
           loadedFileRef.current = chapter.filename;
@@ -129,8 +163,8 @@ export function useAudioPlayer(
               cleanup();
               reject(
                 new Error(
-                  audio.error?.message || "Audio element failed to decode file"
-                )
+                  audio.error?.message || "Audio element failed to decode file",
+                ),
               );
             };
             const cleanup = () => {
@@ -142,22 +176,41 @@ export function useAudioPlayer(
             audio.load();
           });
         } catch (err) {
-          if (request !== loadRequestRef.current) return;
+          if (request !== loadRequestRef.current) {
+            if (strict)
+              throw new Error("Saved position restore was superseded");
+            return;
+          }
           loadingRef.current = false;
           const notFound = err instanceof FileNotFoundError;
           const msg = notFound
             ? "Audiobook files not found — folder may have been moved or deleted"
-            : err instanceof Error ? err.message : "Failed to load audio";
+            : err instanceof Error
+              ? err.message
+              : "Failed to load audio";
           console.error("loadChapter failed:", msg);
-          setState((s) => ({ ...s, isLoading: false, error: msg, fileNotFound: notFound }));
+          setState((s) => ({
+            ...s,
+            isLoading: false,
+            error: msg,
+            fileNotFound: notFound,
+          }));
           loadedFileRef.current = null;
+          if (strict) throw err;
           return;
         }
       }
 
-      if (request !== loadRequestRef.current) return;
+      if (request !== loadRequestRef.current) {
+        if (strict) throw new Error("Saved position restore was superseded");
+        return;
+      }
       loadingRef.current = false;
-      stateRef.current = { ...stateRef.current, currentChapterIndex: index, positionMs: seekMs };
+      stateRef.current = {
+        ...stateRef.current,
+        currentChapterIndex: index,
+        positionMs: seekMs,
+      };
       if (virtual) {
         audio.currentTime = (chapter.startMs! + seekMs) / 1000;
         const chapterDuration = chapter.endMs! - chapter.startMs!;
@@ -193,7 +246,7 @@ export function useAudioPlayer(
         }
       }
     },
-    [chapters, folderPath, getOrCreateAudio, onPositionUpdate, onChapterChange]
+    [chapters, folderPath, getOrCreateAudio, onPositionUpdate, onChapterChange],
   );
 
   // Auto-advance: for non-virtual chapters use the "ended" event,
@@ -258,7 +311,6 @@ export function useAudioPlayer(
   // Load initial chapter
   useEffect(() => {
     loadChapter(initialChapterIndex, initialPositionMs, false, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cleanup
@@ -299,53 +351,73 @@ export function useAudioPlayer(
       }
     }, [onPause, onPlay, capturePosition]),
 
-    seekTo: useCallback((ms: number) => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      const chapter = chapters[stateRef.current.currentChapterIndex];
-      if (chapter && isVirtualChapter(chapter)) {
-        const absoluteMs = chapter.startMs! + ms;
-        audio.currentTime = absoluteMs / 1000;
-        setState((s) => ({ ...s, positionMs: ms }));
-      } else {
-        audio.currentTime = ms / 1000;
-        setState((s) => ({ ...s, positionMs: ms }));
-      }
-      onPositionUpdate?.(stateRef.current.currentChapterIndex, ms);
-      onChapterChange?.(stateRef.current.currentChapterIndex);
-    }, [chapters, onPositionUpdate, onChapterChange]),
+    seekTo: useCallback(
+      (ms: number) => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const chapter = chapters[stateRef.current.currentChapterIndex];
+        if (chapter && isVirtualChapter(chapter)) {
+          const absoluteMs = chapter.startMs! + ms;
+          audio.currentTime = absoluteMs / 1000;
+          setState((s) => ({ ...s, positionMs: ms }));
+        } else {
+          audio.currentTime = ms / 1000;
+          setState((s) => ({ ...s, positionMs: ms }));
+        }
+        onPositionUpdate?.(stateRef.current.currentChapterIndex, ms);
+        onSeek?.();
+      },
+      [chapters, onPositionUpdate, onSeek],
+    ),
 
-    seekBy: useCallback((deltaMs: number) => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      const chapter = chapters[stateRef.current.currentChapterIndex];
+    seekBy: useCallback(
+      (deltaMs: number) => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const chapter = chapters[stateRef.current.currentChapterIndex];
 
-      if (chapter && isVirtualChapter(chapter)) {
-        const absoluteMs = audio.currentTime * 1000;
-        const newAbsoluteMs = Math.max(
-          chapter.startMs!,
-          Math.min(chapter.endMs!, absoluteMs + deltaMs)
-        );
-        audio.currentTime = newAbsoluteMs / 1000;
-        setState((s) => ({ ...s, positionMs: newAbsoluteMs - chapter.startMs! }));
-        onPositionUpdate?.(stateRef.current.currentChapterIndex, newAbsoluteMs - chapter.startMs!);
-      } else {
-        const newTime = Math.max(
-          0,
-          Math.min(audio.duration, audio.currentTime + deltaMs / 1000)
-        );
-        audio.currentTime = newTime;
-        setState((s) => ({ ...s, positionMs: newTime * 1000 }));
-        onPositionUpdate?.(stateRef.current.currentChapterIndex, newTime * 1000);
-      }
-      onChapterChange?.(stateRef.current.currentChapterIndex);
-    }, [chapters, onPositionUpdate, onChapterChange]),
+        if (chapter && isVirtualChapter(chapter)) {
+          const absoluteMs = audio.currentTime * 1000;
+          const newAbsoluteMs = Math.max(
+            chapter.startMs!,
+            Math.min(chapter.endMs!, absoluteMs + deltaMs),
+          );
+          audio.currentTime = newAbsoluteMs / 1000;
+          setState((s) => ({
+            ...s,
+            positionMs: newAbsoluteMs - chapter.startMs!,
+          }));
+          onPositionUpdate?.(
+            stateRef.current.currentChapterIndex,
+            newAbsoluteMs - chapter.startMs!,
+          );
+        } else {
+          const newTime = Math.max(
+            0,
+            Math.min(audio.duration, audio.currentTime + deltaMs / 1000),
+          );
+          audio.currentTime = newTime;
+          setState((s) => ({ ...s, positionMs: newTime * 1000 }));
+          onPositionUpdate?.(
+            stateRef.current.currentChapterIndex,
+            newTime * 1000,
+          );
+        }
+        onSeek?.();
+      },
+      [chapters, onPositionUpdate, onSeek],
+    ),
 
     skipToChapter: useCallback(
       (index: number, seekMs?: number) => {
         return loadChapter(index, seekMs ?? 0);
       },
-      [loadChapter, onChapterChange]
+      [loadChapter, onChapterChange],
+    ),
+    restorePosition: useCallback(
+      (index: number, seekMs: number) =>
+        loadChapter(index, seekMs, false, false, true),
+      [loadChapter],
     ),
 
     nextChapter: useCallback(() => {

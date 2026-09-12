@@ -1,3 +1,4 @@
+import "./lib/telemetry";
 import TrackPlayer from "react-native-track-player";
 import { PlaybackService } from "./lib/trackPlayerService";
 

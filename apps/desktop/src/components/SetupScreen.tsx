@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import { useState } from "react";
 
 interface SetupScreenProps {
+  initialUrl?: string;
   onSelfHostedConnect: (url: string, syncKey: string) => void | Promise<void>;
   onHostedConnect?: () => void;
 }
@@ -11,8 +12,9 @@ interface SetupScreenProps {
 export function SetupScreen({
   onSelfHostedConnect,
   onHostedConnect,
+  initialUrl = "",
 }: SetupScreenProps) {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl);
   const [syncKey, setSyncKey] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,12 +26,21 @@ export function SetupScreen({
     try {
       const endpoint = normalizeDeploymentUrl(url);
       const client = new ConvexHttpClient(endpoint);
-      const result = await client.query(api.authState.checkConnection, { syncKey: syncKey.trim() || undefined });
-      if (result.protocolVersion !== 1) throw new Error("Upgrade this deployment to version 1.0 first");
+      const result = await client.query(api.authState.checkConnection, {
+        syncKey: syncKey.trim() || undefined,
+      });
+      if (result.protocolVersion !== 1)
+        throw new Error("Upgrade this deployment to version 1.0 first");
       await onSelfHostedConnect(endpoint, syncKey.trim());
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to connect. Check the URL, key, and server version.");
-    } finally { setConnecting(false); }
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to connect. Check the URL, key, and server version.",
+      );
+    } finally {
+      setConnecting(false);
+    }
   };
 
   return (
@@ -119,8 +130,15 @@ export function SetupScreen({
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
 
-            <label className="block text-sm text-foreground">Self-hosted access key
-              <input type="password" autoComplete="off" value={syncKey} onChange={(e) => setSyncKey(e.target.value)} className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2" />
+            <label className="block text-sm text-foreground">
+              Self-hosted access key
+              <input
+                type="password"
+                autoComplete="off"
+                value={syncKey}
+                onChange={(e) => setSyncKey(e.target.value)}
+                className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2"
+              />
             </label>
             <button
               type="submit"

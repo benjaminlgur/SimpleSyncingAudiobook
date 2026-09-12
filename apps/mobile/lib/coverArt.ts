@@ -1,4 +1,4 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 const HEADER_READ_BYTES = 1024 * 1024;
 const MAX_ID3_READ_BYTES = 8 * 1024 * 1024;
@@ -52,7 +52,7 @@ function encodeBase64(bytes: Uint8Array): string {
 async function readBytes(
   uri: string,
   length: number,
-  position = 0
+  position = 0,
 ): Promise<Uint8Array> {
   const base64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
@@ -75,11 +75,12 @@ function bytesToAscii(bytes: Uint8Array, start: number, len: number): string {
 function readUInt32BE(bytes: Uint8Array, offset: number): number {
   if (offset + 4 > bytes.length) return 0;
   return (
-    ((bytes[offset] ?? 0) << 24) |
-    ((bytes[offset + 1] ?? 0) << 16) |
-    ((bytes[offset + 2] ?? 0) << 8) |
-    (bytes[offset + 3] ?? 0)
-  ) >>> 0;
+    (((bytes[offset] ?? 0) << 24) |
+      ((bytes[offset + 1] ?? 0) << 16) |
+      ((bytes[offset + 2] ?? 0) << 8) |
+      (bytes[offset + 3] ?? 0)) >>>
+    0
+  );
 }
 
 function readSynchsafeUInt32(bytes: Uint8Array, offset: number): number {
@@ -95,7 +96,7 @@ function readSynchsafeUInt32(bytes: Uint8Array, offset: number): number {
 function findNullTerminator(
   bytes: Uint8Array,
   offset: number,
-  encoding: number
+  encoding: number,
 ): number {
   // 0/3 are single-byte encodings, 1/2 are UTF-16 variants.
   if (encoding === 1 || encoding === 2) {
@@ -126,7 +127,12 @@ function detectImageMime(bytes: Uint8Array): string | null {
     return "image/png";
   }
 
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
     return "image/jpeg";
   }
 
@@ -151,7 +157,9 @@ function asDataUri(imageBytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${encodeBase64(imageBytes)}`;
 }
 
-function extractApicFrame(bytes: Uint8Array): { data: Uint8Array; mime: string } | null {
+function extractApicFrame(
+  bytes: Uint8Array,
+): { data: Uint8Array; mime: string } | null {
   if (bytes.length < 10 || bytesToAscii(bytes, 0, 3) !== "ID3") return null;
 
   const versionMajor = bytes[3] ?? 0;
@@ -177,19 +185,25 @@ function extractApicFrame(bytes: Uint8Array): { data: Uint8Array; mime: string }
 
       const textEncoding = frame[0] ?? 0;
       const mimeEnd = findNullTerminator(frame, 1, 0);
-      const mime = bytesToAscii(frame, 1, Math.max(0, mimeEnd - 1)).toLowerCase();
+      const mime = bytesToAscii(
+        frame,
+        1,
+        Math.max(0, mimeEnd - 1),
+      ).toLowerCase();
 
       const picTypeOffset = Math.min(frame.length, mimeEnd + 1);
       const descStart = Math.min(frame.length, picTypeOffset + 1);
       const descEnd = findNullTerminator(frame, descStart, textEncoding);
       const imageStart = Math.min(
         frame.length,
-        descEnd + (textEncoding === 1 || textEncoding === 2 ? 2 : 1)
+        descEnd + (textEncoding === 1 || textEncoding === 2 ? 2 : 1),
       );
 
       if (imageStart >= frame.length) return null;
       const imageData = frame.subarray(imageStart);
-      const detectedMime = mime.startsWith("image/") ? mime : detectImageMime(imageData);
+      const detectedMime = mime.startsWith("image/")
+        ? mime
+        : detectImageMime(imageData);
       if (!detectedMime) return null;
 
       return { data: imageData, mime: detectedMime };
@@ -202,7 +216,7 @@ function extractApicFrame(bytes: Uint8Array): { data: Uint8Array; mime: string }
 }
 
 function findPngEnd(bytes: Uint8Array, offset: number): number {
-  for (let i = offset + 8; i + 12 <= bytes.length; ) {
+  for (let i = offset + 8; i + 12 <= bytes.length;) {
     const chunkLength = readUInt32BE(bytes, i);
     const typeOffset = i + 4;
     const type = bytesToAscii(bytes, typeOffset, 4);
@@ -221,7 +235,9 @@ function findJpegEnd(bytes: Uint8Array, offset: number): number {
   return -1;
 }
 
-function extractImageFromBuffer(bytes: Uint8Array): { data: Uint8Array; mime: string } | null {
+function extractImageFromBuffer(
+  bytes: Uint8Array,
+): { data: Uint8Array; mime: string } | null {
   for (let i = 0; i + 8 < bytes.length; i += 1) {
     // PNG
     if (
@@ -265,10 +281,17 @@ async function extractFromUri(uri: string): Promise<string | null> {
           ? readSynchsafeUInt32(header, 6) + 10
           : 0;
 
-      const desiredRead = id3TagSize > 0
-        ? Math.min(MAX_ID3_READ_BYTES, Math.max(HEADER_READ_BYTES, id3TagSize))
-        : HEADER_READ_BYTES;
-      const bytes = desiredRead > header.length ? await readBytes(uri, desiredRead) : header;
+      const desiredRead =
+        id3TagSize > 0
+          ? Math.min(
+              MAX_ID3_READ_BYTES,
+              Math.max(HEADER_READ_BYTES, id3TagSize),
+            )
+          : HEADER_READ_BYTES;
+      const bytes =
+        desiredRead > header.length
+          ? await readBytes(uri, desiredRead)
+          : header;
 
       const apic = extractApicFrame(bytes);
       if (apic) {
@@ -296,7 +319,7 @@ async function extractFromUri(uri: string): Promise<string | null> {
 }
 
 export async function extractCoverArtFromAudioUris(
-  uris: string[]
+  uris: string[],
 ): Promise<string | null> {
   const seen = new Set<string>();
   for (const uri of uris) {
@@ -307,4 +330,3 @@ export async function extractCoverArtFromAudioUris(
   }
   return null;
 }
-

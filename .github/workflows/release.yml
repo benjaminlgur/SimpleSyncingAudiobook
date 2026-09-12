@@ -11,6 +11,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    outputs:
+      desktop_matrix: ${{ steps.credentials.outputs.desktop_matrix }}
+      build_desktop: ${{ steps.credentials.outputs.build_desktop }}
+      build_android: ${{ steps.credentials.outputs.build_android }}
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
@@ -22,6 +26,28 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+      - name: Validate release credentials before deployment
+        id: credentials
+        run: node scripts/validate-release.cjs
+        env:
+          RELEASE_PLATFORMS: ${{ vars.RELEASE_PLATFORMS }}
+          HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
+          CONVEX_DEPLOY_KEY_PROD: ${{ secrets.CONVEX_DEPLOY_KEY_PROD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
   create-release:
     needs: validate
@@ -76,23 +102,16 @@ jobs:
         run: npx convex deploy
 
   build-desktop:
+    if: needs.validate.outputs.build_desktop == 'true'
     needs:
+      - validate
       - create-release
       - deploy-backend-prod
     env:
       HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: ubuntu-22.04
-            args: ""
-          - platform: windows-latest
-            args: ""
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
+      matrix: ${{ fromJSON(needs.validate.outputs.desktop_matrix) }}
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -133,6 +152,33 @@ jobs:
             exit 1
           fi
 
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (!$env:WINDOWS_CERTIFICATE -or !$env:WINDOWS_CERTIFICATE_PASSWORD) { throw "Missing Windows signing certificate secrets" }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
+            "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
+          } finally { Remove-Item -LiteralPath $certificatePath -ErrorAction SilentlyContinue }
+
+      - name: Configure signed desktop release and updates
+        run: node scripts/configure-desktop-release.cjs
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
       - name: Test native audio helpers
         working-directory: apps/desktop/src-tauri
         run: cargo test --lib --locked
@@ -142,6 +188,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
+          VITE_SENTRY_DSN: ${{ vars.DESKTOP_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ vars.DESKTOP_SENTRY_DSN != '' && secrets.SENTRY_AUTH_TOKEN || '' }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.DESKTOP_SENTRY_PROJECT }}
+          SENTRY_RELEASE: ${{ github.ref_name }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.release_id }}
@@ -150,15 +209,23 @@ jobs:
           releaseDraft: true
           prerelease: false
           retryAttempts: 3
+          includeUpdaterJson: true
           args: ${{ matrix.args }}
 
   build-android:
+    if: needs.validate.outputs.build_android == 'true'
     needs:
+      - validate
       - create-release
       - deploy-backend-prod
     runs-on: ubuntu-latest
     env:
       HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
+      EXPO_UPDATE_URL: ${{ vars.EXPO_UPDATE_URL }}
+      EXPO_PUBLIC_SENTRY_DSN: ${{ vars.MOBILE_SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.MOBILE_SENTRY_PROJECT }}
+      SENTRY_DISABLE_AUTO_UPLOAD: ${{ vars.MOBILE_SENTRY_DSN == '' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -195,17 +262,43 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Android release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing ANDROID_KEYSTORE_BASE64"; exit 1; }
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
       - name: Generate native Android project
         working-directory: apps/mobile
         env:
           EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
         run: npx expo prebuild --platform android --clean
 
-      - name: Build release APK
+      - name: Build signed APK and AAB
         working-directory: apps/mobile/android
         env:
           EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
-        run: ./gradlew assembleRelease
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          EXPO_PUBLIC_SENTRY_DSN: ${{ vars.MOBILE_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Verify Android signatures
+        shell: bash
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$apksigner" verify --verbose apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          jarsigner -verify apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Remove temporary keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Rename APK
         run: |
@@ -216,6 +309,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: true
-          files: apps/mobile/android/app/build/outputs/apk/release/SimpleSyncingAudiobook-${{ github.ref_name }}.apk
+          files: |
+            apps/mobile/android/app/build/outputs/apk/release/SimpleSyncingAudiobook-${{ github.ref_name }}.apk
+            apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

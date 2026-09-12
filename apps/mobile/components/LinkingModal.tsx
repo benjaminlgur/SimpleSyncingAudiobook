@@ -1,12 +1,9 @@
 import { useState } from "react";
+import { View, Text, TouchableOpacity, Modal, FlatList } from "react-native";
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  Modal,
-  FlatList,
-} from "react-native";
-import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
+  useCloudMutation as useMutation,
+  useCloudQuery as useQuery,
+} from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";
@@ -43,11 +40,16 @@ export function LinkingModal({
   const availableToLink = (nameMatches || []).filter(
     (b) =>
       b._id !== audiobookId &&
-      !(linkedBooks || []).some((lb) => lb._id === b._id)
+      !(linkedBooks || []).some((lb) => lb._id === b._id),
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
       <TouchableOpacity
         className="flex-1 bg-black/40 justify-end"
         activeOpacity={1}
@@ -59,7 +61,11 @@ export function LinkingModal({
               Link Audiobook
             </Text>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={20} color={isDark ? "#9ca3af" : "#6b7280"} />
+              <Ionicons
+                name="close"
+                size={20}
+                color={isDark ? "#9ca3af" : "#6b7280"}
+              />
             </TouchableOpacity>
           </View>
 
@@ -67,18 +73,30 @@ export function LinkingModal({
             <TouchableOpacity
               onPress={() => setTab("linked")}
               className="flex-1 py-2.5 items-center"
-              style={tab === "linked" ? { borderBottomWidth: 2, borderBottomColor: "#f97316" } : {}}
+              style={
+                tab === "linked"
+                  ? { borderBottomWidth: 2, borderBottomColor: "#f97316" }
+                  : {}
+              }
             >
-              <Text className={`text-xs font-medium ${tab === "linked" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}>
+              <Text
+                className={`text-xs font-medium ${tab === "linked" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}
+              >
                 Linked ({(linkedBooks || []).length})
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setTab("available")}
               className="flex-1 py-2.5 items-center"
-              style={tab === "available" ? { borderBottomWidth: 2, borderBottomColor: "#f97316" } : {}}
+              style={
+                tab === "available"
+                  ? { borderBottomWidth: 2, borderBottomColor: "#f97316" }
+                  : {}
+              }
             >
-              <Text className={`text-xs font-medium ${tab === "available" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}>
+              <Text
+                className={`text-xs font-medium ${tab === "available" ? "text-primary" : "text-gray-500 dark:text-gray-400"}`}
+              >
                 Available ({availableToLink.length})
               </Text>
             </TouchableOpacity>
@@ -87,7 +105,9 @@ export function LinkingModal({
           {tab === "linked" ? (
             (linkedBooks || []).length === 0 ? (
               <View className="py-8 items-center">
-                <Text className="text-xs text-gray-500 dark:text-gray-400">No linked audiobooks.</Text>
+                <Text className="text-xs text-gray-500 dark:text-gray-400">
+                  No linked audiobooks.
+                </Text>
               </View>
             ) : (
               <FlatList
@@ -96,9 +116,12 @@ export function LinkingModal({
                 renderItem={({ item }) => (
                   <View className="flex-row items-center justify-between px-4 py-3">
                     <View className="flex-1 mr-3">
-                      <Text className="text-sm text-gray-900 dark:text-gray-100">{item.name}</Text>
+                      <Text className="text-sm text-gray-900 dark:text-gray-100">
+                        {item.name}
+                      </Text>
                       <Text className="text-xs text-gray-500 dark:text-gray-400">
-                        {item.chapters.length} chapters · {item.checksum.slice(0, 8)}
+                        {item.chapters.length} chapters ·{" "}
+                        {item.checksum.slice(0, 8)}
                       </Text>
                     </View>
                     <TouchableOpacity
@@ -129,9 +152,12 @@ export function LinkingModal({
               renderItem={({ item }) => (
                 <View className="flex-row items-center justify-between px-4 py-3">
                   <View className="flex-1 mr-3">
-                    <Text className="text-sm text-gray-900 dark:text-gray-100">{item.name}</Text>
+                    <Text className="text-sm text-gray-900 dark:text-gray-100">
+                      {item.name}
+                    </Text>
                     <Text className="text-xs text-gray-500 dark:text-gray-400">
-                      {item.chapters.length} chapters · {item.checksum.slice(0, 8)}
+                      {item.chapters.length} chapters ·{" "}
+                      {item.checksum.slice(0, 8)}
                     </Text>
                   </View>
                   <TouchableOpacity

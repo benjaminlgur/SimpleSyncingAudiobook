@@ -36,12 +36,21 @@ export function SetupScreen({
     try {
       const endpoint = normalizeDeploymentUrl(url);
       const client = new ConvexHttpClient(endpoint);
-      const result = await client.query(api.authState.checkConnection, { syncKey: syncKey.trim() || undefined });
-      if (result.protocolVersion !== 1) throw new Error("Upgrade this deployment to version 1.0 first");
+      const result = await client.query(api.authState.checkConnection, {
+        syncKey: syncKey.trim() || undefined,
+      });
+      if (result.protocolVersion !== 1)
+        throw new Error("Upgrade this deployment to version 1.0 first");
       await onSelfHostedConnect(endpoint, syncKey.trim());
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to connect. Check the URL, key, and server version.");
-    } finally { setConnecting(false); }
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to connect. Check the URL, key, and server version.",
+      );
+    } finally {
+      setConnecting(false);
+    }
   };
 
   return (
@@ -107,10 +116,20 @@ export function SetupScreen({
             )}
           </View>
 
-          <Text className="text-sm text-gray-700 dark:text-gray-300 mt-3 mb-2">Self-hosted access key</Text>
-          <TextInput value={syncKey} onChangeText={setSyncKey} secureTextEntry autoCapitalize="none" autoCorrect={false} className="border border-gray-300 dark:border-gray-700 rounded-xl p-3 text-gray-900 dark:text-gray-100 mb-4" />
+          <Text className="text-sm text-gray-700 dark:text-gray-300 mt-3 mb-2">
+            Self-hosted access key
+          </Text>
+          <TextInput
+            value={syncKey}
+            onChangeText={setSyncKey}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            className="border border-gray-300 dark:border-gray-700 rounded-xl p-3 text-gray-900 dark:text-gray-100 mb-4"
+          />
           <TouchableOpacity
-            onPress={handleSubmit} disabled={connecting}
+            onPress={handleSubmit}
+            disabled={connecting}
             className="bg-primary rounded-xl py-3.5 items-center"
           >
             <Text className="text-white font-medium text-sm">Connect</Text>

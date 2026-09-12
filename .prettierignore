@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/_generated
+**/dist
+**/android
+**/ios
+**/src-tauri/gen
+**/src-tauri/target
+.native-validation
+pnpm-lock.yaml
+skills-lock.json
+.agents
+.claude

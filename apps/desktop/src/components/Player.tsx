@@ -1,15 +1,24 @@
+import { pickRelocatedBook } from "../lib/relocateBook";
 import { CloudContext } from "@audiobook/shared/react";
+import { DeferredSeek } from "@audiobook/shared";
 import { useContext } from "react";
 import type { PlaybackPosition } from "@audiobook/shared";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
+import {
+  useCloudMutation as useMutation,
+  useCloudQuery as useQuery,
+} from "@audiobook/shared/react";
 import { api } from "../../../../convex/_generated/api";
 import { useAudioPlayer } from "../hooks/useAudioPlayer";
-import { SyncEngine, fromSyncPosition, toSyncPosition } from "@audiobook/shared";
+import {
+  SyncEngine,
+  fromSyncPosition,
+  toSyncPosition,
+} from "@audiobook/shared";
 import type { SyncState, SyncPushResult } from "@audiobook/shared";
 import type { LocalAudiobook } from "./AppShell";
 import { formatTime, formatTimeRemaining } from "../lib/utils";
-import { extractCoverArt, pickAudiobookFolder, pickAudiobookFile, checkPathExists } from "../lib/tauri-fs";
+import { extractCoverArt } from "../lib/tauri-fs";
 import { SyncIndicator } from "./SyncIndicator";
 import { ChaptersDrawer } from "./ChaptersDrawer";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -36,7 +45,6 @@ const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 export function Player({
   book,
-  convexUrl,
   storageScope,
   onBack,
   onConvexIdResolved,
@@ -57,7 +65,6 @@ export function Player({
   const [initialPosition, setInitialPosition] = useState(0);
   const [localInitResolved, setLocalInitResolved] = useState(false);
 
-
   const syncEngineRef = useRef<SyncEngine | null>(null);
   const initialLoadedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
@@ -74,23 +81,42 @@ export function Player({
   const scopedStorageAdapter = useMemo(
     () => ({
       getItem: (key: string) =>
-        localStorageAdapter.getItem(`${storageScope}:${key}`).then((value) =>
-          value ?? (convexIdRef.current ? localStorageAdapter.getItem(`${storageScope}:audiobook_sync_${convexIdRef.current}`) : null)),
+        localStorageAdapter
+          .getItem(`${storageScope}:${key}`)
+          .then(
+            (value) =>
+              value ??
+              (convexIdRef.current
+                ? localStorageAdapter.getItem(
+                    `${storageScope}:audiobook_sync_${convexIdRef.current}`,
+                  )
+                : null),
+          ),
       setItem: (key: string, value: string) =>
         localStorageAdapter.setItem(`${storageScope}:${key}`, value),
       removeItem: (key: string) =>
         localStorageAdapter.removeItem(`${storageScope}:${key}`),
     }),
-    [storageScope]
+    [storageScope],
   );
-  const history = useQuery(api.positions.history, convexId && showHistory ? { audiobookId: convexId as Id<"audiobooks"> } : "skip");
+  const history = useQuery(
+    api.positions.history,
+    convexId && showHistory
+      ? { audiobookId: convexId as Id<"audiobooks"> }
+      : "skip",
+  );
   const remoteWirePosition = useQuery(
     api.positions.get,
-    convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip"
+    convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
   );
-  const remotePosition = useMemo(() => remoteWirePosition && ({
-    ...remoteWirePosition, ...fromSyncPosition(book.chapters, remoteWirePosition),
-  }), [remoteWirePosition, book.chapters]);
+  const remotePosition = useMemo(
+    () =>
+      remoteWirePosition && {
+        ...remoteWirePosition,
+        ...fromSyncPosition(book.chapters, remoteWirePosition),
+      },
+    [remoteWirePosition, book.chapters],
+  );
 
   // Resolve Convex ID on mount if needed
   useEffect(() => {
@@ -126,21 +152,28 @@ export function Player({
     setInitialLoaded(true);
   }, [remotePosition, initialLoaded, localInitResolved]);
 
-  const seekToRef = useRef<((chapter: number, ms: number) => void | Promise<void>) | null>(null);
+  const deferredSeek = useMemo(
+    () => new DeferredSeek(),
+    [book.name, book.checksum, storageScope],
+  );
 
   useEffect(() => {
-    if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (localInitResolved && remotePosition)
+      syncEngineRef.current?.reconcilePosition(remotePosition);
   }, [localInitResolved, remotePosition]);
 
   useEffect(() => {
-    if (cloudReady && localInitResolved) void syncEngineRef.current?.onReconnect();
+    if (cloudReady && localInitResolved)
+      void syncEngineRef.current?.onReconnect();
   }, [cloudReady, localInitResolved]);
 
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
     let cancelled = false;
 
-    const pushFn = async (position: PlaybackPosition): Promise<SyncPushResult> => {
+    const pushFn = async (
+      position: PlaybackPosition,
+    ): Promise<SyncPushResult> => {
       if (!convexIdRef.current) throw new Error("No Convex ID yet");
       const result = await updatePosition({
         audiobookId: convexIdRef.current as Id<"audiobooks">,
@@ -154,7 +187,8 @@ export function Player({
         accepted: result.accepted,
         revision: result.revision,
         serverPosition: result.serverPosition && {
-          ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
+          ...result.serverPosition,
+          ...fromSyncPosition(book.chapters, result.serverPosition),
         },
       };
     };
@@ -163,7 +197,7 @@ export function Player({
       chapterIndex: number;
       positionMs: number;
     }) => {
-      return seekToRef.current?.(remote.chapterIndex, remote.positionMs);
+      return deferredSeek.seek(remote);
     };
 
     const engine = new SyncEngine(
@@ -199,28 +233,40 @@ export function Player({
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [scopedStorageAdapter, syncIdentity, updatePosition]);
+  }, [scopedStorageAdapter, syncIdentity, updatePosition, deferredSeek]);
+
+  useEffect(() => () => deferredSeek.cancel(), [deferredSeek]);
 
   useEffect(() => {
     const background = () => {
-      if (document.visibilityState === "hidden") void syncEngineRef.current?.onBackground();
+      if (document.visibilityState === "hidden")
+        void syncEngineRef.current?.onBackground();
     };
-    const reconnect = () => { void syncEngineRef.current?.onReconnect(); };
-    const unload = () => { void syncEngineRef.current?.onClose(); };
+    const reconnect = () => {
+      void syncEngineRef.current?.onReconnect();
+    };
+    const unload = () => {
+      void syncEngineRef.current?.onClose();
+    };
     document.addEventListener("visibilitychange", background);
     window.addEventListener("online", reconnect);
     window.addEventListener("beforeunload", unload);
     let disposed = false;
     let unlisten: (() => void) | undefined;
     if (isTauri()) {
-      void getCurrentWindow().onCloseRequested(async (event) => {
-        event.preventDefault();
-        await Promise.race([
-          syncEngineRef.current?.onClose(),
-          new Promise((resolve) => setTimeout(resolve, 1500)),
-        ]);
-        await getCurrentWindow().destroy();
-      }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+      void getCurrentWindow()
+        .onCloseRequested(async (event) => {
+          event.preventDefault();
+          await Promise.race([
+            syncEngineRef.current?.onClose(),
+            new Promise((resolve) => setTimeout(resolve, 1500)),
+          ]);
+          await getCurrentWindow().destroy();
+        })
+        .then((stop) => {
+          if (disposed) stop();
+          else unlisten = stop;
+        });
     }
     return () => {
       disposed = true;
@@ -235,7 +281,7 @@ export function Player({
     (chapterIndex: number, positionMs: number) => {
       syncEngineRef.current?.updatePosition(chapterIndex, positionMs);
     },
-    []
+    [],
   );
 
   const handleChapterChange = useCallback(() => {
@@ -243,7 +289,7 @@ export function Player({
   }, []);
 
   const handlePause = useCallback(() => {
-    syncEngineRef.current?.onPause();
+    return syncEngineRef.current?.onPause();
   }, []);
 
   const handlePlay = useCallback(() => {
@@ -263,41 +309,88 @@ export function Player({
   return (
     <>
       <div className="px-4 py-2 text-sm border-b border-border">
-        <button className="text-muted-foreground underline" onClick={() => setShowHistory(!showHistory)}>{showHistory ? "Hide recent positions" : "Recent positions"}</button>
-        {showHistory && <div className="max-h-36 overflow-auto">
-          {history?.length === 0 && <p>No earlier positions saved yet.</p>}
-          {history?.map((row) => {
-            const position = fromSyncPosition(book.chapters, row);
-            return <button key={row.revision} disabled={!!syncState.conflict} className="block py-2 text-left text-primary disabled:opacity-50" onClick={() => void syncEngineRef.current?.restorePosition(position.chapterIndex, position.positionMs)}>
-              Restore chapter {position.chapterIndex + 1}, {formatTime(position.positionMs)} � {new Date(row.updatedAt).toLocaleString()}
-            </button>;
-          })}
-        </div>}
+        <button
+          className="text-muted-foreground underline"
+          onClick={() => setShowHistory(!showHistory)}
+        >
+          {showHistory ? "Hide recent positions" : "Recent positions"}
+        </button>
+        {showHistory && (
+          <div className="max-h-36 overflow-auto">
+            {history?.length === 0 && <p>No earlier positions saved yet.</p>}
+            {history?.map((row) => {
+              const position = fromSyncPosition(book.chapters, row);
+              return (
+                <button
+                  key={row.revision}
+                  disabled={!!syncState.conflict}
+                  className="block py-2 text-left text-primary disabled:opacity-50"
+                  onClick={() =>
+                    void syncEngineRef.current?.restorePosition(
+                      position.chapterIndex,
+                      position.positionMs,
+                    )
+                  }
+                >
+                  Restore chapter {position.chapterIndex + 1},{" "}
+                  {formatTime(position.positionMs)} ·{" "}
+                  {new Date(row.updatedAt).toLocaleString()}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
-      {syncState.conflict && <div role="alert" className="p-4 bg-card border-b border-border space-y-2 text-sm">
-        <p>Another device has a different position. Your local progress is saved.</p>
-        <p>Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1}, {formatTime(syncState.pending?.positionMs ?? 0)}. Other device: chapter {syncState.conflict.chapterIndex + 1}, {formatTime(syncState.conflict.positionMs)}.</p>
-        <button className="mr-4 underline" onClick={() => void syncEngineRef.current?.resolveConflict("local")}>Keep this device</button>
-        <button className="underline" onClick={() => void syncEngineRef.current?.resolveConflict("remote")}>Use other device</button>
-      </div>}
-    <PlayerInner
-      book={book}
-      initialChapter={initialChapter}
-      initialPosition={initialPosition}
-      syncState={syncState}
-      showChapters={showChapters}
-      showSpeedMenu={showSpeedMenu}
-      onToggleChapters={() => setShowChapters(!showChapters)}
-      onToggleSpeedMenu={() => setShowSpeedMenu(!showSpeedMenu)}
-      onBack={onBack}
-      onPositionUpdate={handlePositionUpdate}
-      onChapterChange={handleChapterChange}
-      onPause={handlePause}
-      onPlay={handlePlay}
-      onManualSync={() => syncEngineRef.current?.manualSync()}
-      onRelocate={onRelocate}
-      seekToRef={seekToRef}
-    />
+      {syncState.conflict && (
+        <div
+          role="alert"
+          className="p-4 bg-card border-b border-border space-y-2 text-sm"
+        >
+          <p>
+            Another device has a different position. Your local progress is
+            saved.
+          </p>
+          <p>
+            Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1},{" "}
+            {formatTime(syncState.pending?.positionMs ?? 0)}. Other device:
+            chapter {syncState.conflict.chapterIndex + 1},{" "}
+            {formatTime(syncState.conflict.positionMs)}.
+          </p>
+          <button
+            className="mr-4 underline"
+            onClick={() => void syncEngineRef.current?.resolveConflict("local")}
+          >
+            Keep this device
+          </button>
+          <button
+            className="underline"
+            onClick={() =>
+              void syncEngineRef.current?.resolveConflict("remote")
+            }
+          >
+            Use other device
+          </button>
+        </div>
+      )}
+      <PlayerInner
+        book={book}
+        initialChapter={initialChapter}
+        initialPosition={initialPosition}
+        syncState={syncState}
+        showChapters={showChapters}
+        showSpeedMenu={showSpeedMenu}
+        onToggleChapters={() => setShowChapters(!showChapters)}
+        onToggleSpeedMenu={() => setShowSpeedMenu(!showSpeedMenu)}
+        onBack={onBack}
+        onPositionUpdate={handlePositionUpdate}
+        onChapterChange={handleChapterChange}
+        onSeek={() => void syncEngineRef.current?.onSeek()}
+        onPause={handlePause}
+        onPlay={handlePlay}
+        onManualSync={() => syncEngineRef.current?.manualSync()}
+        onRelocate={onRelocate}
+        deferredSeek={deferredSeek}
+      />
     </>
   );
 }
@@ -314,11 +407,12 @@ interface PlayerInnerProps {
   onBack: () => void;
   onPositionUpdate: (chapterIndex: number, positionMs: number) => void;
   onChapterChange: (chapterIndex: number) => void;
-  onPause: () => void;
+  onSeek: () => void;
+  onPause: () => void | Promise<void>;
   onPlay: () => void;
   onManualSync: () => void;
   onRelocate: (newFolderPath: string) => void;
-  seekToRef: React.MutableRefObject<((chapter: number, ms: number) => void | Promise<void>) | null>;
+  deferredSeek: DeferredSeek;
 }
 
 function SeekBar({
@@ -334,14 +428,11 @@ function SeekBar({
   const draggingRef = useRef(false);
   const [dragPercent, setDragPercent] = useState<number | null>(null);
 
-  const percentFromEvent = useCallback(
-    (e: MouseEvent | React.MouseEvent) => {
-      const rect = barRef.current?.getBoundingClientRect();
-      if (!rect) return 0;
-      return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    },
-    []
-  );
+  const percentFromEvent = useCallback((e: MouseEvent | React.MouseEvent) => {
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  }, []);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -409,43 +500,26 @@ function PlayerInner({
   onBack,
   onPositionUpdate,
   onChapterChange,
+  onSeek,
   onPause,
   onPlay,
   onManualSync,
   onRelocate,
-  seekToRef,
+  deferredSeek,
 }: PlayerInnerProps) {
   const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
 
   const handleRelocateFromPlayer = async () => {
-    const isM4b = book.chapters.length > 0 &&
-      book.chapters[0].filename === book.chapters[book.chapters.length - 1].filename;
-
-    let newPath: string | null;
-    if (isM4b) {
-      newPath = await pickAudiobookFile();
-      if (newPath) {
-        const sepIdx = Math.max(newPath.lastIndexOf("/"), newPath.lastIndexOf("\\"));
-        newPath = sepIdx > 0 ? newPath.substring(0, sepIdx) : newPath;
-      }
-    } else {
-      newPath = await pickAudiobookFolder();
+    try {
+      const newPath = await pickRelocatedBook(book);
+      if (newPath) onRelocate(newPath);
+    } catch (error) {
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Unable to locate audiobook files",
+      );
     }
-
-    if (!newPath) return;
-
-    const firstFile = book.chapters[0]?.filename;
-    if (firstFile) {
-      const sep = newPath.includes("\\") ? "\\" : "/";
-      const testPath = `${newPath}${sep}${firstFile}`;
-      const found = await checkPathExists(testPath);
-      if (!found) {
-        alert(`Could not find "${firstFile}" in the selected location. Please choose the correct folder.`);
-        return;
-      }
-    }
-
-    onRelocate(newPath);
   };
 
   useEffect(() => {
@@ -453,7 +527,9 @@ function PlayerInner({
     extractCoverArt(book.folderPath, book.chapters).then((url) => {
       if (!cancelled) setCoverArtUrl(url);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [book.folderPath, book.chapters]);
 
   const [playerState, controls] = useAudioPlayer({
@@ -463,16 +539,15 @@ function PlayerInner({
     initialPositionMs: initialPosition,
     onPositionUpdate,
     onChapterChange,
+    onSeek,
     onPause,
     onPlay,
   });
 
   useEffect(() => {
-    seekToRef.current = (chapter: number, ms: number) => {
-      return controls.skipToChapter(chapter, ms);
-    };
-    return () => { seekToRef.current = null; };
-  }, [controls, seekToRef]);
+    if (playerState.isLoading) return;
+    return deferredSeek.attach(controls.restorePosition);
+  }, [controls.restorePosition, deferredSeek, playerState.isLoading]);
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =
@@ -546,12 +621,26 @@ function PlayerInner({
       {/* File-not-found banner */}
       {playerState.fileNotFound && (
         <div className="mx-6 mb-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 flex items-center gap-3">
-          <svg className="h-5 w-5 flex-shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          <svg
+            className="h-5 w-5 flex-shrink-0 text-destructive"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+            />
           </svg>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-destructive">Files not found</p>
-            <p className="text-xs text-muted-foreground">Folder may have been moved or deleted</p>
+            <p className="text-sm font-medium text-destructive">
+              Files not found
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Folder may have been moved or deleted
+            </p>
           </div>
           <button
             onClick={handleRelocateFromPlayer}
@@ -588,7 +677,7 @@ function PlayerInner({
           <span className="text-xs text-muted-foreground">
             {formatTimeRemaining(
               playerState.positionMs,
-              playerState.durationMs
+              playerState.durationMs,
             )}
           </span>
         </div>
@@ -613,9 +702,23 @@ function PlayerInner({
           className="p-2 text-foreground hover:text-primary transition-colors relative"
           aria-label="Rewind 30 seconds"
         >
-          <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3 9l6-6" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h12a6 6 0 0 1 0 12h-3" />
+          <svg
+            className="h-7 w-7"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M9 15 3 9l6-6"
+            />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M3 9h12a6 6 0 0 1 0 12h-3"
+            />
           </svg>
           <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-0.5">
             30
@@ -633,7 +736,11 @@ function PlayerInner({
               <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
             </svg>
           ) : (
-            <svg className="h-6 w-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <svg
+              className="h-6 w-6 ml-0.5"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+            >
               <path d="M8 5v14l11-7z" />
             </svg>
           )}
@@ -645,9 +752,23 @@ function PlayerInner({
           className="p-2 text-foreground hover:text-primary transition-colors relative"
           aria-label="Forward 30 seconds"
         >
-          <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m15 15 6-6-6-6" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 9H9a6 6 0 0 0 0 12h3" />
+          <svg
+            className="h-7 w-7"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="m15 15 6-6-6-6"
+            />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M21 9H9a6 6 0 0 0 0 12h3"
+            />
           </svg>
           <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold mt-0.5">
             30

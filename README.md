@@ -285,7 +285,7 @@ The tag push triggers the release workflow, which builds and uploads:
 | macOS (Apple Silicon) | `.dmg` |
 | macOS (Intel) | `.dmg` |
 | Linux | `.deb`, `.AppImage`, `.rpm` |
-| Android | `.apk` |
+| Android | signed `.apk`, `.aab` |
 
 Once builds finish, a **draft release** appears on the
 [Releases page](https://github.com/benjaminlgur/SimpleGlobalAudiobook/releases).
@@ -332,6 +332,8 @@ cache was removed by the operating system.
 Run `pnpm verify` for all TypeScript checks, regression/integration tests, the
 production desktop web build, and the Android JavaScript export. Run
 `cargo test --lib --locked` in `apps/desktop/src-tauri` for native disk tests.
-Release CI builds Windows, Linux, macOS (ARM and Intel), and the Android APK.
+Release CI builds Windows, Linux, macOS (ARM and Intel), and signed Android APK/AAB files.
 Physical-device audio routing and OS notification behavior still need device QA;
 compile and mocked native-service tests cannot certify those behaviors.
+
+See [release configuration and compatibility notes](docs/release-readiness.md) for signing secrets, update endpoints, crash reporting, and the Expo SDK 54 migration boundary.

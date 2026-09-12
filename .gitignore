@@ -23,6 +23,7 @@ apps/mobile/ios/
 
 # Build artifacts
 *.tsbuildinfo
+.native-validation/
 
 # OS files
 .DS_Store

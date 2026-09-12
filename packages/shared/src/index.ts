@@ -17,3 +17,5 @@ export { computeChecksum } from "./checksum";
 export { toSyncPosition, fromSyncPosition } from "./chapter-position";
 export { recordingFingerprint, fingerprintFile } from "./fingerprint";
 export { normalizeDeploymentUrl } from "./connection";
+export { registerDeviceOnce, forgetDeviceRegistration } from "./registration";
+export { DeferredSeek } from "./deferred-seek";

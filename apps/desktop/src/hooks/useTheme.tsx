@@ -1,4 +1,10 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+} from "react";
 
 type ThemePreference = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
@@ -41,7 +47,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    resolveTheme(theme)
+    resolveTheme(theme),
   );
 
   const setTheme = useCallback((next: ThemePreference) => {

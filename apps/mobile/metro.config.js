@@ -1,17 +1,11 @@
-const { getDefaultConfig } = require("expo/metro-config");
+const { getSentryExpoConfig } = require("@sentry/react-native/metro");
 const { withNativeWind } = require("nativewind/metro");
-const path = require("path");
-
-const projectRoot = __dirname;
-const monorepoRoot = path.resolve(projectRoot, "../..");
-
-const config = getDefaultConfig(projectRoot);
-
-config.watchFolders = [monorepoRoot];
-config.resolver.nodeModulesPaths = [
-  path.resolve(projectRoot, "node_modules"),
-  path.resolve(monorepoRoot, "node_modules"),
+const path = require("node:path");
+// Expo owns monorepo resolution; forcing every nested dependency through the
+// root node_modules mixes incompatible native and desktop SDK versions.
+const config = getSentryExpoConfig(__dirname);
+config.watchFolders = [
+  ...new Set([...config.watchFolders, path.resolve(__dirname, "../..")]),
 ];
-config.resolver.disableHierarchicalLookup = true;
 
 module.exports = withNativeWind(config, { input: "./global.css" });

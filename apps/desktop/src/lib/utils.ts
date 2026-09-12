@@ -17,7 +17,10 @@ export function formatTime(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-export function formatTimeRemaining(currentMs: number, totalMs: number): string {
+export function formatTimeRemaining(
+  currentMs: number,
+  totalMs: number,
+): string {
   const remaining = Math.max(0, totalMs - currentMs);
   return `-${formatTime(remaining)}`;
 }

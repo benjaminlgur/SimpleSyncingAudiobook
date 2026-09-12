@@ -17,7 +17,14 @@ export default function IndexScreen() {
   }, []);
 
   if (!mounted) {
-    return <View style={{ flex: 1, backgroundColor: colorScheme === "dark" ? "#030712" : "#fff" }} />;
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colorScheme === "dark" ? "#030712" : "#fff",
+        }}
+      />
+    );
   }
 
   if (convexUrl) {

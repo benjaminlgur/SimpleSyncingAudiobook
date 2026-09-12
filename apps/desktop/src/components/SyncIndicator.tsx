@@ -22,7 +22,14 @@ export function SyncIndicator({ syncState, onManualSync }: SyncIndicatorProps) {
           className={`relative inline-flex rounded-full h-2.5 w-2.5 ${dotColor(status)}`}
         />
       </span>
-      <span className="text-muted-foreground">{statusLabel(status)}</span>
+      <span
+        className="text-muted-foreground"
+        role={status === "error" ? "alert" : undefined}
+      >
+        {status === "error"
+          ? `${lastError || "Sync failed"} — Retry`
+          : statusLabel(status)}
+      </span>
     </button>
   );
 }

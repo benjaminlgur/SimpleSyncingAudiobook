@@ -62,7 +62,10 @@ function getHostedScopeMigrationMatch(scope: string): {
   };
 }
 
-function findLegacyHostedScopedKey(baseKey: string, scope: string): string | null {
+function findLegacyHostedScopedKey(
+  baseKey: string,
+  scope: string,
+): string | null {
   const match = getHostedScopeMigrationMatch(scope);
   if (!match) {
     return null;
@@ -85,7 +88,7 @@ function findLegacyHostedScopedKey(baseKey: string, scope: string): string | nul
 function loadLibrary(
   storageKey: string,
   storageScope: string,
-  legacyKey?: string
+  legacyKey?: string,
 ): LocalAudiobook[] {
   const stored = localStorage.getItem(storageKey);
   if (stored !== null) {
@@ -134,12 +137,15 @@ function isInvalidAudiobookIdError(error: unknown): boolean {
 function getOrCreateDeviceId(
   storageKey: string,
   storageScope: string,
-  legacyKey?: string
+  legacyKey?: string,
 ) {
   const existing = localStorage.getItem(storageKey);
   if (existing) return existing;
 
-  const legacyHostedKey = findLegacyHostedScopedKey(DEVICE_ID_KEY, storageScope);
+  const legacyHostedKey = findLegacyHostedScopedKey(
+    DEVICE_ID_KEY,
+    storageScope,
+  );
   if (legacyHostedKey) {
     const legacyHostedDeviceId = localStorage.getItem(legacyHostedKey);
     if (legacyHostedDeviceId) {
@@ -163,7 +169,11 @@ function getOrCreateDeviceId(
   return next;
 }
 
-export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) {
+export function AppShell({
+  convexUrl,
+  onDisconnect,
+  userScope,
+}: AppShellProps) {
   const convex = useConvex();
   const mode = useConnectionMode();
   const { ready: cloudReady, syncKey } = useContext(CloudContext);
@@ -172,19 +182,19 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
       getStorageScope({
         mode,
         convexUrl,
-        userScope: mode === "hosted" ? userScope ?? null : null,
+        userScope: mode === "hosted" ? (userScope ?? null) : null,
       }),
-    [convexUrl, mode, userScope]
+    [convexUrl, mode, userScope],
   );
   const libraryStorageKey = useMemo(
     () =>
       storageScope ? getScopedStorageKey(LIBRARY_KEY, storageScope) : null,
-    [storageScope]
+    [storageScope],
   );
   const deviceStorageKey = useMemo(
     () =>
       storageScope ? getScopedStorageKey(DEVICE_ID_KEY, storageScope) : null,
-    [storageScope]
+    [storageScope],
   );
   const legacyLibraryKey = mode === "self-hosted" ? LIBRARY_KEY : undefined;
   const legacyDeviceKey = mode === "self-hosted" ? DEVICE_ID_KEY : undefined;
@@ -207,12 +217,14 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
     let cancelled = false;
     setStorageReady(false);
     setActiveBook(null);
-    setDeviceId(getOrCreateDeviceId(deviceStorageKey, storageScope, legacyDeviceKey));
+    setDeviceId(
+      getOrCreateDeviceId(deviceStorageKey, storageScope, legacyDeviceKey),
+    );
 
     const storedBooks = loadLibrary(
       libraryStorageKey,
       storageScope,
-      legacyLibraryKey
+      legacyLibraryKey,
     );
 
     setLibrary(storedBooks);
@@ -222,7 +234,7 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
         storedBooks.map(async (book) => {
           const pathExists = await checkPathExists(book.folderPath);
           return { ...book, missing: !pathExists };
-        })
+        }),
       );
 
       if (cancelled) return;
@@ -268,17 +280,18 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
               invalidIdKeys.add(`${book.name}::${book.checksum}`);
             }
           }
-        })
+        }),
       );
 
-      if ((missingKeys.size === 0 && invalidIdKeys.size === 0) || cancelled) return;
+      if ((missingKeys.size === 0 && invalidIdKeys.size === 0) || cancelled)
+        return;
 
-      const updated = library
-        .map((book) =>
-          (missingKeys.has(`${book.name}::${book.checksum}`) || invalidIdKeys.has(`${book.name}::${book.checksum}`))
-            ? { ...book, convexId: undefined }
-            : book
-        );
+      const updated = library.map((book) =>
+        missingKeys.has(`${book.name}::${book.checksum}`) ||
+        invalidIdKeys.has(`${book.name}::${book.checksum}`)
+          ? { ...book, convexId: undefined }
+          : book,
+      );
       setLibrary(updated);
       if (libraryStorageKey) {
         saveLibrary(libraryStorageKey, updated);
@@ -305,12 +318,12 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
         saveLibrary(libraryStorageKey, books);
       }
     },
-    [libraryStorageKey]
+    [libraryStorageKey],
   );
 
   const addBook = (book: LocalAudiobook) => {
     const existing = library.find(
-      (b) => b.name === book.name && b.checksum === book.checksum
+      (b) => b.name === book.name && b.checksum === book.checksum,
     );
     if (existing) {
       setActiveBook({ ...existing, missing: false });
@@ -325,7 +338,7 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
     const updated = library.map((b) =>
       b.name === book.name && b.checksum === book.checksum
         ? { ...b, convexId }
-        : b
+        : b,
     );
     persistLibrary(updated);
     if (
@@ -341,7 +354,7 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
     const updated = library.map((b) =>
       b.name === book.name && b.checksum === book.checksum
         ? { ...b, folderPath: newFolderPath, missing: false }
-        : b
+        : b,
     );
     persistLibrary(updated);
     if (
@@ -349,13 +362,17 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
       activeBook.name === book.name &&
       activeBook.checksum === book.checksum
     ) {
-      setActiveBook({ ...activeBook, folderPath: newFolderPath, missing: false });
+      setActiveBook({
+        ...activeBook,
+        folderPath: newFolderPath,
+        missing: false,
+      });
     }
   };
 
   const removeBook = (book: LocalAudiobook) => {
     const updated = library.filter(
-      (b) => !(b.name === book.name && b.checksum === book.checksum)
+      (b) => !(b.name === book.name && b.checksum === book.checksum),
     );
     persistLibrary(updated);
     if (
@@ -379,31 +396,51 @@ export function AppShell({ convexUrl, onDisconnect, userScope }: AppShellProps) 
 
   return (
     <>
-      {activeBook && <div hidden={!showPlayer}>
-        <Player
-          key={`${storageScope}:${activeBook.name}:${activeBook.checksum}`}
-          book={activeBook}
-          convexUrl={convexUrl}
-          storageScope={storageScope}
-          onBack={() => setShowPlayer(false)}
-          onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
-          onRelocate={(newPath) => relocateBook(activeBook, newPath)}
-        />
-      </div>}
-      {(!activeBook || !showPlayer) && <>
-        {activeBook && <button className="w-full p-3 bg-card border-b border-border text-primary text-sm" onClick={() => setShowPlayer(true)}>Return to {activeBook.name}</button>}
-        {showSettings ? <Settings onBack={() => setShowSettings(false)} onDisconnect={onDisconnect} /> :
-          <Library
-            deviceId={deviceId}
-            books={library}
-            onAddBook={addBook}
-            onBookConvexIdResolved={updateBookConvexId}
-            onSelectBook={(book) => { setActiveBook(book); setShowPlayer(true); }}
-            onRemoveBook={removeBook}
-            onRelocateBook={relocateBook}
-            onOpenSettings={() => setShowSettings(true)}
-          />}
-      </>}
+      {activeBook && (
+        <div hidden={!showPlayer}>
+          <Player
+            key={`${storageScope}:${activeBook.name}:${activeBook.checksum}`}
+            book={activeBook}
+            convexUrl={convexUrl}
+            storageScope={storageScope}
+            onBack={() => setShowPlayer(false)}
+            onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
+            onRelocate={(newPath) => relocateBook(activeBook, newPath)}
+          />
+        </div>
+      )}
+      {(!activeBook || !showPlayer) && (
+        <>
+          {activeBook && (
+            <button
+              className="w-full p-3 bg-card border-b border-border text-primary text-sm"
+              onClick={() => setShowPlayer(true)}
+            >
+              Return to {activeBook.name}
+            </button>
+          )}
+          {showSettings ? (
+            <Settings
+              onBack={() => setShowSettings(false)}
+              onDisconnect={onDisconnect}
+            />
+          ) : (
+            <Library
+              deviceId={deviceId}
+              books={library}
+              onAddBook={addBook}
+              onBookConvexIdResolved={updateBookConvexId}
+              onSelectBook={(book) => {
+                setActiveBook(book);
+                setShowPlayer(true);
+              }}
+              onRemoveBook={removeBook}
+              onRelocateBook={relocateBook}
+              onOpenSettings={() => setShowSettings(true)}
+            />
+          )}
+        </>
+      )}
     </>
   );
 }

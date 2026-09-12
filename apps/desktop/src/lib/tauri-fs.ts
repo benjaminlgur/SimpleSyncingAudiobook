@@ -1,13 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { AudioTokenizer } from "./audio-tokenizer";
-import { readDir, stat, exists } from "@tauri-apps/plugin-fs";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
 import { recordingFingerprint } from "@audiobook/shared";
-
-const AUDIO_EXTENSIONS = new Set([
-  ".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav", ".aac", ".wma",
-]);
 
 const MIME_TYPES: Record<string, string> = {
   mp3: "audio/mpeg",
@@ -21,29 +16,30 @@ const MIME_TYPES: Record<string, string> = {
   wma: "audio/x-ms-wma",
 };
 
-function isAudioFile(name: string): boolean {
-  const ext = name.substring(name.lastIndexOf(".")).toLowerCase();
-  return AUDIO_EXTENSIONS.has(ext);
-}
-
 function joinPath(folder: string, file: string): string {
   const sep = folder.includes("\\") ? "\\" : "/";
   return `${folder}${sep}${file}`;
 }
 
 function parentDir(filePath: string): string {
-  const sepIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const sepIdx = Math.max(
+    filePath.lastIndexOf("/"),
+    filePath.lastIndexOf("\\"),
+  );
   return sepIdx > 0 ? filePath.substring(0, sepIdx) : filePath;
 }
 
 function baseName(filePath: string): string {
-  const sepIdx = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const sepIdx = Math.max(
+    filePath.lastIndexOf("/"),
+    filePath.lastIndexOf("\\"),
+  );
   return sepIdx >= 0 ? filePath.substring(sepIdx + 1) : filePath;
 }
 
 export async function checkPathExists(path: string): Promise<boolean> {
   try {
-    return await exists(path);
+    return await invoke<boolean>("audio_path_exists", { path });
   } catch {
     return false;
   }
@@ -64,22 +60,12 @@ export async function pickAudiobookFile(): Promise<string | null> {
 }
 
 export async function scanAudiobookFolder(
-  folderPath: string
+  folderPath: string,
 ): Promise<AudiobookMeta | null> {
-  const entries = await readDir(folderPath);
-
-  const audioFiles: { name: string; size: number }[] = [];
-
-  for (const entry of entries) {
-    if (entry.isFile && entry.name && isAudioFile(entry.name)) {
-      try {
-        const fileStat = await stat(joinPath(folderPath, entry.name));
-        audioFiles.push({ name: entry.name, size: fileStat.size });
-      } catch {
-        audioFiles.push({ name: entry.name, size: 0 });
-      }
-    }
-  }
+  const audioFiles = await invoke<{ name: string; size: number }[]>(
+    "list_audio_files",
+    { path: folderPath },
+  );
 
   if (audioFiles.length === 0) return null;
 
@@ -90,7 +76,15 @@ export async function scanAudiobookFolder(
     size: f.size,
   }));
 
-  const checksum = recordingFingerprint(await Promise.all(fileInfos.map((file) => invoke<string>("fingerprint_audio", { path: joinPath(folderPath, file.name) }))));
+  const checksum = recordingFingerprint(
+    await Promise.all(
+      fileInfos.map((file) =>
+        invoke<string>("fingerprint_audio", {
+          path: joinPath(folderPath, file.name),
+        }),
+      ),
+    ),
+  );
 
   const chapters: ChapterInfo[] = audioFiles.map((f, i) => ({
     index: i,
@@ -107,24 +101,37 @@ export async function scanAudiobookFolder(
   };
 }
 
-function chapterStartSec(ch: { sampleOffset?: number; start?: number; timeScale?: number }, sampleRate: number): number {
-  if (ch.start !== undefined && ch.timeScale !== undefined && ch.timeScale > 0) {
+function chapterStartSec(
+  ch: { sampleOffset?: number; start?: number; timeScale?: number },
+  sampleRate: number,
+): number {
+  if (
+    ch.start !== undefined &&
+    ch.timeScale !== undefined &&
+    ch.timeScale > 0
+  ) {
     return ch.start / ch.timeScale;
   }
   return (ch.sampleOffset ?? 0) / (sampleRate || 44100);
 }
 
 export async function scanM4bFile(
-  filePath: string
+  filePath: string,
 ): Promise<AudiobookMeta | null> {
-  const fileStat = await stat(filePath);
-
+  const fileStat = {
+    size: await invoke<number>("audio_file_size", { path: filePath }),
+  };
 
   const { parseFromTokenizer } = await import("music-metadata");
-  const metadata = await parseFromTokenizer(new AudioTokenizer(filePath, {
-    mimeType: MIME_TYPES[baseName(filePath).split(".").pop()?.toLowerCase() ?? ""] || "audio/mp4",
-    size: fileStat.size,
-  }), { includeChapters: true, skipCovers: true });
+  const metadata = await parseFromTokenizer(
+    new AudioTokenizer(filePath, {
+      mimeType:
+        MIME_TYPES[baseName(filePath).split(".").pop()?.toLowerCase() ?? ""] ||
+        "audio/mp4",
+      size: fileStat.size,
+    }),
+    { includeChapters: true, skipCovers: true },
+  );
 
   const totalDurationMs = (metadata.format.duration || 0) * 1000;
   const sampleRate = metadata.format.sampleRate || 44100;
@@ -140,9 +147,10 @@ export async function scanM4bFile(
     chapters = rawChapters.map((ch, i) => {
       const startSec = chapterStartSec(ch, sampleRate);
       const startMs = Math.round(startSec * 1000);
-      const nextStartSec = i + 1 < rawChapters.length
-        ? chapterStartSec(rawChapters[i + 1], sampleRate)
-        : (totalDurationMs / 1000);
+      const nextStartSec =
+        i + 1 < rawChapters.length
+          ? chapterStartSec(rawChapters[i + 1], sampleRate)
+          : totalDurationMs / 1000;
       const endMs = Math.round(nextStartSec * 1000);
 
       return {
@@ -155,18 +163,21 @@ export async function scanM4bFile(
       };
     });
   } else {
-    chapters = [{
-      index: 0,
-      filename: fileName,
-      title: bookName,
-      startMs: 0,
-      endMs: Math.round(totalDurationMs),
-      durationMs: Math.round(totalDurationMs),
-    }];
+    chapters = [
+      {
+        index: 0,
+        filename: fileName,
+        title: bookName,
+        startMs: 0,
+        endMs: Math.round(totalDurationMs),
+        durationMs: Math.round(totalDurationMs),
+      },
+    ];
   }
 
-  const fileInfos: FileInfo[] = [{ name: fileName, size: fileStat.size }];
-  const checksum = recordingFingerprint([await invoke<string>("fingerprint_audio", { path: filePath })]);
+  const checksum = recordingFingerprint([
+    await invoke<string>("fingerprint_audio", { path: filePath }),
+  ]);
 
   return {
     name: bookName,
@@ -178,18 +189,20 @@ export async function scanM4bFile(
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {
-    super(`Audiobook files not found — folder may have been moved or deleted.\n${path}`);
+    super(
+      `Audiobook files not found — folder may have been moved or deleted.\n${path}`,
+    );
     this.name = "FileNotFoundError";
   }
 }
 
 export async function loadAudioFileAsBlob(
   folderPath: string,
-  filename: string
+  filename: string,
 ): Promise<string> {
   const fullPath = joinPath(folderPath, filename);
 
-  if (!await checkPathExists(fullPath)) throw new FileNotFoundError(fullPath);
+  if (!(await checkPathExists(fullPath))) throw new FileNotFoundError(fullPath);
   await invoke("authorize_audio", { path: fullPath });
   return convertFileSrc(fullPath);
 }
@@ -201,7 +214,7 @@ const coverArtCache = new Map<string, string | null>();
 
 export async function extractCoverArt(
   folderPath: string,
-  chapters: ChapterInfo[]
+  chapters: ChapterInfo[],
 ): Promise<string | null> {
   const cacheKey = `${folderPath}:${chapters[0]?.filename ?? ""}`;
   if (coverArtCache.has(cacheKey)) return coverArtCache.get(cacheKey)!;
@@ -216,11 +229,20 @@ export async function extractCoverArt(
       if (ext !== "mp3" && ext !== "m4a" && ext !== "m4b") continue;
 
       const fullPath = joinPath(folderPath, chapter.filename);
-      const info = await stat(fullPath);
+      const info = {
+        size: await invoke<number>("audio_file_size", { path: fullPath }),
+      };
       const { parseFromTokenizer } = await import("music-metadata");
-      const metadata = await parseFromTokenizer(new AudioTokenizer(fullPath, {
-        mimeType: MIME_TYPES[ext!] || "audio/mpeg", size: info.size,
-      }, 8 * 1024 * 1024));
+      const metadata = await parseFromTokenizer(
+        new AudioTokenizer(
+          fullPath,
+          {
+            mimeType: MIME_TYPES[ext!] || "audio/mpeg",
+            size: info.size,
+          },
+          8 * 1024 * 1024,
+        ),
+      );
 
       const pic = metadata.common.picture?.[0];
       if (pic) {

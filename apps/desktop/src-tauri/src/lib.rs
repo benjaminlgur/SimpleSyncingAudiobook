@@ -34,6 +34,36 @@ fn audio_path(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
+fn audio_file_size(path: String) -> Result<u64, String> {
+    std::fs::metadata(audio_path(&path)?).map(|m| m.len()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn audio_path_exists(path: String) -> bool {
+    // Directories are used to locate an imported book; file access remains
+    // restricted to canonical audio paths by every read command.
+    std::fs::canonicalize(&path).is_ok_and(|p| p.is_dir() || audio_path(&path).is_ok())
+}
+
+#[derive(serde::Serialize)]
+struct AudioEntry { name: String, size: u64 }
+
+#[tauri::command]
+fn list_audio_files(path: String) -> Result<Vec<AudioEntry>, String> {
+    let directory = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if let Ok(path) = audio_path(&entry.path().to_string_lossy()) {
+            if !path.starts_with(&directory) { continue; }
+            let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+            entries.push(AudioEntry { name: entry.file_name().to_string_lossy().into_owned(), size });
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
 fn authorize_audio(app: tauri::AppHandle, path: String) -> Result<(), String> {
     app.asset_protocol_scope().allow_file(audio_path(&path)?).map_err(|e| e.to_string())
 }
@@ -76,9 +106,10 @@ async fn fingerprint_audio(path: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![authorize_audio, read_audio_range, fingerprint_audio, get_sync_key, set_sync_key])
+        .invoke_handler(tauri::generate_handler![authorize_audio, read_audio_range, fingerprint_audio, get_sync_key, set_sync_key, audio_file_size, audio_path_exists, list_audio_files])
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

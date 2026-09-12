@@ -1,6 +1,6 @@
 {
   "name": "@audiobook/shared",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -9,7 +9,7 @@
     "./react": "./src/react.ts"
   },
   "peerDependencies": {
-    "react": "^18.3.1",
+    "react": "^19.1.0",
     "convex": "^1.45.0"
   },
   "scripts": {

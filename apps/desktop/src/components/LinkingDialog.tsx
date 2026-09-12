@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
+import {
+  useCloudMutation as useMutation,
+  useCloudQuery as useQuery,
+} from "@audiobook/shared/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 
@@ -30,7 +33,7 @@ export function LinkingDialog({
   const availableToLink = (nameMatches || []).filter(
     (b) =>
       b._id !== audiobookId &&
-      !(linkedBooks || []).some((lb) => lb._id === b._id)
+      !(linkedBooks || []).some((lb) => lb._id === b._id),
   );
 
   return (
@@ -46,8 +49,18 @@ export function LinkingDialog({
             onClick={onClose}
             className="p-1 text-muted-foreground hover:text-foreground"
           >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18 18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -92,7 +105,8 @@ export function LinkingDialog({
                   <div>
                     <p className="text-sm text-foreground">{book.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {book.chapters.length} chapters · {book.checksum.slice(0, 8)}
+                      {book.chapters.length} chapters ·{" "}
+                      {book.checksum.slice(0, 8)}
                     </p>
                   </div>
                   <button
@@ -112,7 +126,8 @@ export function LinkingDialog({
             )
           ) : availableToLink.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-6">
-              No other audiobooks with the name "{audiobookName}" found in Convex.
+              No other audiobooks with the name "{audiobookName}" found in
+              Convex.
             </p>
           ) : (
             availableToLink.map((book) => (
@@ -123,7 +138,8 @@ export function LinkingDialog({
                 <div>
                   <p className="text-sm text-foreground">{book.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {book.chapters.length} chapters · {book.checksum.slice(0, 8)}
+                    {book.chapters.length} chapters ·{" "}
+                    {book.checksum.slice(0, 8)}
                   </p>
                 </div>
                 <button

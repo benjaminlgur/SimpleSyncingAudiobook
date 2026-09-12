@@ -35,6 +35,24 @@ parseEnvFile(path.join(workspaceRoot, ".env"));
 
 module.exports = () => ({
   ...appJson.expo,
+  runtimeVersion: { policy: "fingerprint" },
+  updates: process.env.EXPO_UPDATE_URL
+    ? {
+        url: process.env.EXPO_UPDATE_URL,
+        checkAutomatically: "ON_LOAD",
+        fallbackToCacheTimeout: 0,
+      }
+    : { enabled: false },
+  plugins: [
+    ...appJson.expo.plugins,
+    [
+      "@sentry/react-native/expo",
+      {
+        organization: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+      },
+    ],
+  ],
   extra: {
     ...(appJson.expo.extra ?? {}),
     hostedConvexUrl: process.env.EXPO_PUBLIC_HOSTED_CONVEX_URL ?? "",

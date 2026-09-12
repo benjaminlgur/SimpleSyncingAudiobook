@@ -3,7 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 
-const keyFor = (key: string) => `audiobook.${bytesToHex(sha256(utf8ToBytes(key)))}`;
+const keyFor = (key: string) =>
+  `audiobook.${bytesToHex(sha256(utf8ToBytes(key)))}`;
 export const secureStorage = {
   async getItem(key: string) {
     const value = await SecureStore.getItemAsync(keyFor(key));
@@ -15,7 +16,8 @@ export const secureStorage = {
     }
     return legacy;
   },
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(keyFor(key), value),
+  setItem: (key: string, value: string) =>
+    SecureStore.setItemAsync(keyFor(key), value),
   async removeItem(key: string) {
     await SecureStore.deleteItemAsync(keyFor(key));
     await AsyncStorage.removeItem(key);

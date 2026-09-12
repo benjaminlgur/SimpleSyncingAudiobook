@@ -16,10 +16,7 @@ export function ChaptersDrawer({
   return (
     <div className="fixed inset-0 z-50">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
       {/* Drawer */}
       <div className="absolute bottom-0 left-0 right-0 bg-card border-t border-border rounded-t-xl max-h-[60vh] flex flex-col animate-in slide-in-from-bottom duration-200">

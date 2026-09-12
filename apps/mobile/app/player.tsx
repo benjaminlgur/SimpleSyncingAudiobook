@@ -1,3 +1,5 @@
+import { registerDeviceOnce } from "@audiobook/shared";
+import { loadScopedLibrary } from "../lib/libraryStorage";
 import { CloudContext } from "@audiobook/shared/react";
 import { useContext } from "react";
 import type { PlaybackPosition } from "@audiobook/shared";
@@ -15,17 +17,27 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
+import {
+  useCloudMutation as useMutation,
+  useCloudQuery as useQuery,
+} from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import NetInfo from "@react-native-community/netinfo";
-import { SyncEngine, fromSyncPosition, toSyncPosition } from "@audiobook/shared";
-import { capturePlaybackPosition, flushPlaybackSession, getPlaybackSession, openPlaybackSession } from "../lib/playbackSession";
+import {
+  SyncEngine,
+  fromSyncPosition,
+  toSyncPosition,
+} from "@audiobook/shared";
+import {
+  capturePlaybackPosition,
+  flushPlaybackSession,
+  getPlaybackSession,
+  openPlaybackSession,
+} from "../lib/playbackSession";
 import type {
   SyncState,
   SyncPushResult,
   AudiobookMeta,
-  ChapterInfo,
 } from "@audiobook/shared";
 import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
@@ -64,95 +76,6 @@ const asyncStorageAdapter = {
   removeItem: (key: string) => AsyncStorage.removeItem(key),
 };
 
-async function readStoredLibrary(storageKey: string): Promise<LocalAudiobook[]> {
-  const stored = await AsyncStorage.getItem(storageKey);
-  if (!stored) return [];
-
-  try {
-    return JSON.parse(stored) as LocalAudiobook[];
-  } catch {
-    return [];
-  }
-}
-
-function decodeUriValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function getHostedScopeMigrationMatch(scope: string): {
-  keyPrefix: string;
-  userMarker: string;
-} | null {
-  if (!scope.startsWith("hosted:")) {
-    return null;
-  }
-
-  const [, encodedUrl, encodedUserId] = scope.split(":");
-  if (!encodedUrl || !encodedUserId) {
-    return null;
-  }
-
-  const userId = decodeUriValue(encodedUserId);
-  return {
-    keyPrefix: `hosted:${encodedUrl}:`,
-    userMarker: `%7C${userId}%7C`,
-  };
-}
-
-async function findLegacyHostedScopedKey(
-  baseKey: string,
-  scope: string,
-): Promise<string | null> {
-  const match = getHostedScopeMigrationMatch(scope);
-  if (!match) {
-    return null;
-  }
-
-  const keys = await AsyncStorage.getAllKeys();
-  return (
-    keys.find(
-      (key) =>
-        key.startsWith(`${baseKey}:${match.keyPrefix}`) &&
-        key.includes(match.userMarker),
-    ) ?? null
-  );
-}
-
-async function loadScopedLibrary(
-  storageKey: string,
-  storageScope: string,
-  legacyKey?: string,
-): Promise<LocalAudiobook[]> {
-  const scopedStored = await AsyncStorage.getItem(storageKey);
-  if (scopedStored !== null) {
-    return readStoredLibrary(storageKey);
-  }
-
-  const legacyHostedKey = await findLegacyHostedScopedKey(LIBRARY_KEY, storageScope);
-  if (legacyHostedKey) {
-    const hostedLibrary = await readStoredLibrary(legacyHostedKey);
-    if (hostedLibrary.length > 0) {
-      await AsyncStorage.setItem(storageKey, JSON.stringify(hostedLibrary));
-    }
-    return hostedLibrary;
-  }
-
-  if (!legacyKey) {
-    return [];
-  }
-
-  const legacyStored = await AsyncStorage.getItem(legacyKey);
-  if (legacyStored === null) {
-    return [];
-  }
-
-  return readStoredLibrary(legacyKey);
-}
-
 export default function PlayerScreen() {
   const { bookKey } = useLocalSearchParams<{ bookKey: string }>();
   const router = useRouter();
@@ -173,7 +96,6 @@ export default function PlayerScreen() {
   const [initialPosition, setInitialPosition] = useState(0);
   const [initialLoaded, setInitialLoaded] = useState(false);
   const [localInitResolved, setLocalInitResolved] = useState(false);
-
 
   const syncEngineRef = useRef<SyncEngine | null>(null);
   const controlsRef = useRef<{
@@ -254,8 +176,17 @@ export default function PlayerScreen() {
       storageScope
         ? {
             getItem: (key: string) =>
-              asyncStorageAdapter.getItem(`${storageScope}:${key}`).then((value) =>
-                value ?? (convexId ? asyncStorageAdapter.getItem(`${storageScope}:audiobook_sync_${convexId}`) : null)),
+              asyncStorageAdapter
+                .getItem(`${storageScope}:${key}`)
+                .then(
+                  (value) =>
+                    value ??
+                    (convexId
+                      ? asyncStorageAdapter.getItem(
+                          `${storageScope}:audiobook_sync_${convexId}`,
+                        )
+                      : null),
+                ),
             setItem: (key: string, value: string) =>
               asyncStorageAdapter.setItem(`${storageScope}:${key}`, value),
             removeItem: (key: string) =>
@@ -264,15 +195,26 @@ export default function PlayerScreen() {
         : null,
     [storageScope, convexId],
   );
-  const history = useQuery(api.positions.history, convexId && showHistory ? { audiobookId: convexId as Id<"audiobooks"> } : "skip");
+  const history = useQuery(
+    api.positions.history,
+    convexId && showHistory
+      ? { audiobookId: convexId as Id<"audiobooks"> }
+      : "skip",
+  );
   const remoteWirePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
   );
 
-  const remotePosition = useMemo(() => remoteWirePosition && book && ({
-    ...remoteWirePosition, ...fromSyncPosition(book.chapters, remoteWirePosition),
-  }), [remoteWirePosition, book]);
+  const remotePosition = useMemo(
+    () =>
+      remoteWirePosition &&
+      book && {
+        ...remoteWirePosition,
+        ...fromSyncPosition(book.chapters, remoteWirePosition),
+      },
+    [remoteWirePosition, book],
+  );
 
   useEffect(() => {
     if (!syncIdentity) return;
@@ -308,11 +250,13 @@ export default function PlayerScreen() {
 
       if (deviceId) {
         try {
-          await registerOnDevice({
-            audiobookId: resolvedConvexId as Id<"audiobooks">,
-            deviceId,
-            platform: "mobile",
-          });
+          await registerDeviceOnce(deviceId, resolvedConvexId, () =>
+            registerOnDevice({
+              audiobookId: resolvedConvexId as Id<"audiobooks">,
+              deviceId,
+              platform: "mobile",
+            }),
+          );
         } catch {
           // Best effort while offline.
         }
@@ -367,11 +311,13 @@ export default function PlayerScreen() {
   }, [remotePosition, initialLoaded, book, localInitResolved]);
 
   useEffect(() => {
-    if (localInitResolved && remotePosition) syncEngineRef.current?.reconcilePosition(remotePosition);
+    if (localInitResolved && remotePosition)
+      syncEngineRef.current?.reconcilePosition(remotePosition);
   }, [localInitResolved, remotePosition]);
 
   useEffect(() => {
-    if (cloudReady && localInitResolved) void syncEngineRef.current?.onReconnect();
+    if (cloudReady && localInitResolved)
+      void syncEngineRef.current?.onReconnect();
   }, [cloudReady, localInitResolved]);
 
   // Initialize sync engine — works with or without a Convex ID.
@@ -379,7 +325,9 @@ export default function PlayerScreen() {
     if (!book || !syncIdentity || !scopedStorageAdapter) return;
     let cancelled = false;
 
-    const pushFn = async (position: PlaybackPosition): Promise<SyncPushResult> => {
+    const pushFn = async (
+      position: PlaybackPosition,
+    ): Promise<SyncPushResult> => {
       if (!convexId) throw new Error("No Convex ID yet");
       const result = await updatePosition({
         audiobookId: convexId as Id<"audiobooks">,
@@ -393,14 +341,22 @@ export default function PlayerScreen() {
         accepted: result.accepted,
         revision: result.revision,
         serverPosition: result.serverPosition && {
-          ...result.serverPosition, ...fromSyncPosition(book.chapters, result.serverPosition),
+          ...result.serverPosition,
+          ...fromSyncPosition(book.chapters, result.serverPosition),
         },
       };
     };
 
     let unsub: (() => void) | undefined;
     void (async () => {
-      const session = await openPlaybackSession(sessionKey, syncIdentity, book.chapters, scopedStorageAdapter, pushFn, () => !cancelled);
+      const session = await openPlaybackSession(
+        sessionKey,
+        syncIdentity,
+        book.chapters,
+        scopedStorageAdapter,
+        pushFn,
+        () => !cancelled,
+      );
       if (cancelled) return;
       syncEngineRef.current = session.engine;
       unsub = session.engine.subscribe(setSyncState);
@@ -414,7 +370,12 @@ export default function PlayerScreen() {
       setLocalInitResolved(true);
     })().catch((error: unknown) => {
       if (cancelled) return;
-      setSyncState((state) => ({ ...state, status: "error", lastError: error instanceof Error ? error.message : "Unable to restore playback" }));
+      setSyncState((state) => ({
+        ...state,
+        status: "error",
+        lastError:
+          error instanceof Error ? error.message : "Unable to restore playback",
+      }));
       setLocalInitResolved(true);
     });
 
@@ -425,7 +386,14 @@ export default function PlayerScreen() {
       if (getPlaybackSession(sessionKey)?.ready) void flushPlaybackSession();
       syncEngineRef.current = null;
     };
-  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition, book, sessionKey]);
+  }, [
+    convexId,
+    scopedStorageAdapter,
+    syncIdentity,
+    updatePosition,
+    book,
+    sessionKey,
+  ]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {
@@ -463,43 +431,98 @@ export default function PlayerScreen() {
 
   return (
     <>
+      {syncState.lastError && !syncState.conflict && (
+        <View accessibilityRole="alert" className="p-4">
+          <Text className="text-orange-600">{syncState.lastError}</Text>
+          <TouchableOpacity
+            onPress={() => void syncEngineRef.current?.manualSync()}
+          >
+            <Text className="text-primary">Retry sync</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <View className="px-4 py-2 bg-white dark:bg-gray-950">
-        <TouchableOpacity onPress={() => setShowHistory(!showHistory)}><Text className="text-gray-500">{showHistory ? "Hide recent positions" : "Recent positions"}</Text></TouchableOpacity>
-        {showHistory && <ScrollView style={{ maxHeight: 140 }}>
-          {history?.length === 0 && <Text className="text-gray-500">No earlier positions saved yet.</Text>}
-          {history?.map((row) => {
-            const position = fromSyncPosition(book.chapters, row);
-            return <TouchableOpacity key={row.revision} disabled={!!syncState.conflict} onPress={() => void syncEngineRef.current?.restorePosition(position.chapterIndex, position.positionMs)}>
-              <Text className="py-2 text-orange-500">Restore chapter {position.chapterIndex + 1}, {formatTime(position.positionMs)} � {new Date(row.updatedAt).toLocaleString()}</Text>
-            </TouchableOpacity>;
-          })}
-        </ScrollView>}
+        <TouchableOpacity onPress={() => setShowHistory(!showHistory)}>
+          <Text className="text-gray-500">
+            {showHistory ? "Hide recent positions" : "Recent positions"}
+          </Text>
+        </TouchableOpacity>
+        {showHistory && (
+          <ScrollView style={{ maxHeight: 140 }}>
+            {history?.length === 0 && (
+              <Text className="text-gray-500">
+                No earlier positions saved yet.
+              </Text>
+            )}
+            {history?.map((row) => {
+              const position = fromSyncPosition(book.chapters, row);
+              return (
+                <TouchableOpacity
+                  key={row.revision}
+                  disabled={!!syncState.conflict}
+                  onPress={() =>
+                    void syncEngineRef.current?.restorePosition(
+                      position.chapterIndex,
+                      position.positionMs,
+                    )
+                  }
+                >
+                  <Text className="py-2 text-orange-500">
+                    Restore chapter {position.chapterIndex + 1},{" "}
+                    {formatTime(position.positionMs)} ·{" "}
+                    {new Date(row.updatedAt).toLocaleString()}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
       </View>
-      {syncState.conflict && <View className="p-4 bg-card">
-        <Text className="text-foreground">Another device has a different position. Your local progress is saved.</Text>
-        <Text className="text-foreground">Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1}, {formatTime(syncState.pending?.positionMs ?? 0)}. Other: chapter {syncState.conflict.chapterIndex + 1}, {formatTime(syncState.conflict.positionMs)}.</Text>
-        <TouchableOpacity onPress={() => void syncEngineRef.current?.resolveConflict("local")}><Text className="text-primary py-2">Keep this device</Text></TouchableOpacity>
-        <TouchableOpacity onPress={() => void syncEngineRef.current?.resolveConflict("remote")}><Text className="text-primary py-2">Use other device</Text></TouchableOpacity>
-      </View>}
-    <PlayerInner
-      book={book}
-      sessionKey={sessionKey}
-      fileUris={fileUris}
-      initialChapter={initialChapter}
-      initialPosition={initialPosition}
-      syncState={syncState}
-      showChapters={showChapters}
-      showSpeedMenu={showSpeedMenu}
-      onToggleChapters={() => setShowChapters(!showChapters)}
-      onToggleSpeedMenu={() => setShowSpeedMenu(!showSpeedMenu)}
-      onBack={() => router.back()}
-      onPositionUpdate={handlePositionUpdate}
-      onChapterChange={handleChapterChange}
-      onPause={handlePause}
-      onPlay={handlePlay}
-      onManualSync={() => syncEngineRef.current?.manualSync()}
-      controlsRef={controlsRef}
-    />
+      {syncState.conflict && (
+        <View className="p-4 bg-card">
+          <Text className="text-foreground">
+            Another device has a different position. Your local progress is
+            saved.
+          </Text>
+          <Text className="text-foreground">
+            Here: chapter {(syncState.pending?.chapterIndex ?? 0) + 1},{" "}
+            {formatTime(syncState.pending?.positionMs ?? 0)}. Other: chapter{" "}
+            {syncState.conflict.chapterIndex + 1},{" "}
+            {formatTime(syncState.conflict.positionMs)}.
+          </Text>
+          <TouchableOpacity
+            onPress={() => void syncEngineRef.current?.resolveConflict("local")}
+          >
+            <Text className="text-primary py-2">Keep this device</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() =>
+              void syncEngineRef.current?.resolveConflict("remote")
+            }
+          >
+            <Text className="text-primary py-2">Use other device</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      <PlayerInner
+        book={book}
+        sessionKey={sessionKey}
+        fileUris={fileUris}
+        initialChapter={initialChapter}
+        initialPosition={initialPosition}
+        syncState={syncState}
+        showChapters={showChapters}
+        showSpeedMenu={showSpeedMenu}
+        onToggleChapters={() => setShowChapters(!showChapters)}
+        onToggleSpeedMenu={() => setShowSpeedMenu(!showSpeedMenu)}
+        onBack={() => router.back()}
+        onPositionUpdate={handlePositionUpdate}
+        onChapterChange={handleChapterChange}
+        onPause={handlePause}
+        onPlay={handlePlay}
+        onManualSync={() => syncEngineRef.current?.manualSync()}
+        controlsRef={controlsRef}
+      />
     </>
   );
 }
@@ -686,325 +709,328 @@ function PlayerInner({
   return (
     <AppScreen isDark={isDark}>
       <View className="flex-1">
-      {/* Header */}
-      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between">
-        <TouchableOpacity onPress={onBack} className="flex-row items-center">
-          <Ionicons name="chevron-back" size={20} color={mutedColor} />
-          <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">
-            Library
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={onManualSync}
-          className="flex-row items-center"
-        >
-          <View
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: 4,
-              backgroundColor: syncDotColor,
-              marginRight: 6,
-            }}
-          />
-          <Text className="text-xs text-gray-500 dark:text-gray-400">
-            {syncState.status === "synced"
-              ? "Synced"
-              : syncState.status === "syncing"
-                ? "Syncing..."
-                : syncState.status === "error"
-                  ? "Sync failed"
-                  : "Not synced"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Cover Art */}
-      <View className="flex-1 items-center justify-center px-8">
-        {coverArtUrl ? (
-          <Image
-            source={{ uri: coverArtUrl }}
-            resizeMode="cover"
-            className="w-64 h-64 rounded-2xl border border-gray-200 dark:border-gray-700"
-          />
-        ) : (
-          <View className="w-64 h-64 rounded-2xl bg-orange-50 dark:bg-orange-950/30 items-center justify-center border border-gray-200 dark:border-gray-700">
-            <Ionicons name="book" size={56} color="#f9731660" />
-            <Text
-              className="text-sm font-medium mt-2 px-4 text-center"
-              style={{ color: "#f97316aa" }}
-              numberOfLines={2}
-            >
-              {book.name}
+        {/* Header */}
+        <View className="px-4 pt-2 pb-3 flex-row items-center justify-between">
+          <TouchableOpacity onPress={onBack} className="flex-row items-center">
+            <Ionicons name="chevron-back" size={20} color={mutedColor} />
+            <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">
+              Library
             </Text>
-          </View>
-        )}
-      </View>
+          </TouchableOpacity>
 
-      {/* Error banner */}
-      {playerState.error && (
-        <View className="mx-6 mb-2 rounded-lg p-3 flex-row items-center bg-red-50 dark:bg-red-950/30 border border-red-300 dark:border-red-900">
-          <Ionicons name="warning" size={18} color="#ef4444" />
-          <View className="flex-1 ml-2">
-            <Text className="text-xs font-medium text-red-500">
-              Playback Error
-            </Text>
-            <Text
-              className="text-xs text-gray-500 dark:text-gray-400"
-              numberOfLines={2}
-            >
-              {playerState.error}
-            </Text>
-          </View>
-          <TouchableOpacity onPress={onBack}>
-            <Text className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
-              Go Back
+          <TouchableOpacity
+            onPress={onManualSync}
+            className="flex-row items-center"
+          >
+            <View
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: syncDotColor,
+                marginRight: 6,
+              }}
+            />
+            <Text className="text-xs text-gray-500 dark:text-gray-400">
+              {syncState.status === "synced"
+                ? "Synced"
+                : syncState.status === "syncing"
+                  ? "Syncing..."
+                  : syncState.status === "error"
+                    ? "Sync failed"
+                    : "Not synced"}
             </Text>
           </TouchableOpacity>
         </View>
-      )}
 
-      {/* Chapter label */}
-      <Text
-        className="text-sm font-medium text-gray-900 dark:text-gray-100 text-center px-6 mb-2"
-        numberOfLines={1}
-      >
-        {chapterLabel}
-      </Text>
+        {/* Cover Art */}
+        <View className="flex-1 items-center justify-center px-8">
+          {coverArtUrl ? (
+            <Image
+              source={{ uri: coverArtUrl }}
+              resizeMode="cover"
+              className="w-64 h-64 rounded-2xl border border-gray-200 dark:border-gray-700"
+            />
+          ) : (
+            <View className="w-64 h-64 rounded-2xl bg-orange-50 dark:bg-orange-950/30 items-center justify-center border border-gray-200 dark:border-gray-700">
+              <Ionicons name="book" size={56} color="#f9731660" />
+              <Text
+                className="text-sm font-medium mt-2 px-4 text-center"
+                style={{ color: "#f97316aa" }}
+                numberOfLines={2}
+              >
+                {book.name}
+              </Text>
+            </View>
+          )}
+        </View>
 
-      {/* Progress bar */}
-      <View className="px-6 mb-1">
-        <View
-          onLayout={handleProgressBarLayout}
-          onStartShouldSetResponder={() => true}
-          onMoveShouldSetResponder={() => true}
-          onResponderGrant={handleScrubStart}
-          onResponderMove={handleScrubMove}
-          onResponderRelease={handleScrubEnd}
-          onResponderTerminate={handleScrubCancel}
-          className="py-3 -my-3"
+        {/* Error banner */}
+        {playerState.error && (
+          <View className="mx-6 mb-2 rounded-lg p-3 flex-row items-center bg-red-50 dark:bg-red-950/30 border border-red-300 dark:border-red-900">
+            <Ionicons name="warning" size={18} color="#ef4444" />
+            <View className="flex-1 ml-2">
+              <Text className="text-xs font-medium text-red-500">
+                Playback Error
+              </Text>
+              <Text
+                className="text-xs text-gray-500 dark:text-gray-400"
+                numberOfLines={2}
+              >
+                {playerState.error}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onBack}>
+              <Text className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
+                Go Back
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Chapter label */}
+        <Text
+          className="text-sm font-medium text-gray-900 dark:text-gray-100 text-center px-6 mb-2"
+          numberOfLines={1}
         >
-          <View className="h-5 justify-center">
-            <View className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full">
+          {chapterLabel}
+        </Text>
+
+        {/* Progress bar */}
+        <View className="px-6 mb-1">
+          <View
+            onLayout={handleProgressBarLayout}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={handleScrubStart}
+            onResponderMove={handleScrubMove}
+            onResponderRelease={handleScrubEnd}
+            onResponderTerminate={handleScrubCancel}
+            className="py-3 -my-3"
+          >
+            <View className="h-5 justify-center">
+              <View className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full">
+                <View
+                  className="h-1.5 bg-primary rounded-full"
+                  style={{ width: `${displayedProgressPercent}%` }}
+                />
+              </View>
               <View
-                className="h-1.5 bg-primary rounded-full"
-                style={{ width: `${displayedProgressPercent}%` }}
+                style={{
+                  position: "absolute",
+                  left: progressThumbLeft,
+                  top: 2,
+                  width: PROGRESS_THUMB_SIZE,
+                  height: PROGRESS_THUMB_SIZE,
+                  borderRadius: PROGRESS_THUMB_RADIUS,
+                  backgroundColor: "#f97316",
+                  borderWidth: 2,
+                  borderColor: isDark ? "#030712" : "#ffffff",
+                  shadowColor: "#000000",
+                  shadowOpacity: 0.18,
+                  shadowRadius: 2,
+                  shadowOffset: { width: 0, height: 1 },
+                  elevation: 2,
+                }}
               />
             </View>
-            <View
-              style={{
-                position: "absolute",
-                left: progressThumbLeft,
-                top: 2,
-                width: PROGRESS_THUMB_SIZE,
-                height: PROGRESS_THUMB_SIZE,
-                borderRadius: PROGRESS_THUMB_RADIUS,
-                backgroundColor: "#f97316",
-                borderWidth: 2,
-                borderColor: isDark ? "#030712" : "#ffffff",
-                shadowColor: "#000000",
-                shadowOpacity: 0.18,
-                shadowRadius: 2,
-                shadowOffset: { width: 0, height: 1 },
-                elevation: 2,
-              }}
-            />
           </View>
-        </View>
-        <View className="flex-row justify-between mt-1.5">
-          <Text className="text-xs text-gray-500 dark:text-gray-400">
-            {formatTime(displayedPositionMs)}
-          </Text>
-          <Text className="text-xs text-gray-500 dark:text-gray-400">
-            -
-            {formatTime(
-              Math.max(0, playerState.durationMs - displayedPositionMs),
-            )}
-          </Text>
-        </View>
-      </View>
-
-      {/* Transport Controls */}
-      <View
-        className="flex-row items-center justify-center py-4 px-6"
-        style={{ gap: 24 }}
-      >
-        <TouchableOpacity onPress={controls.prevChapter} className="p-2">
-          <Ionicons name="play-skip-back" size={24} color={iconColor} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => controls.seekBy(-30000)}
-          className="p-2"
-        >
-          <Ionicons name="play-back" size={28} color={iconColor} />
-          <Text
-            className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
-            style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
-          >
-            30
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={controls.togglePlayPause}
-          className="w-14 h-14 rounded-full bg-primary items-center justify-center"
-          style={{ elevation: 4 }}
-        >
-          <Ionicons
-            name={playerState.isPlaying ? "pause" : "play"}
-            size={24}
-            color="white"
-            style={playerState.isPlaying ? {} : { marginLeft: 2 }}
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => controls.seekBy(30000)}
-          className="p-2"
-        >
-          <Ionicons name="play-forward" size={28} color={iconColor} />
-          <Text
-            className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
-            style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
-          >
-            30
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={controls.nextChapter} className="p-2">
-          <Ionicons name="play-skip-forward" size={24} color={iconColor} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Bottom controls */}
-      <View className="flex-row items-center justify-around px-6 py-4 border-t border-gray-200 dark:border-gray-800">
-        <TouchableOpacity onPress={onToggleSpeedMenu} className="items-center">
-          <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            {playerState.playbackSpeed}x
-          </Text>
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-            Speed
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={onToggleChapters} className="items-center">
-          <Ionicons name="list" size={20} color={iconColor} />
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-            Chapters
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={onManualSync} className="items-center">
-          <Ionicons name="sync" size={20} color={iconColor} />
-          <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-            Sync
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Speed Menu Modal */}
-      <Modal
-        visible={showSpeedMenu}
-        transparent
-        animationType="fade"
-        onRequestClose={onToggleSpeedMenu}
-      >
-        <TouchableOpacity
-          className="flex-1 bg-black/40 justify-end"
-          activeOpacity={1}
-          onPress={onToggleSpeedMenu}
-        >
-          <View className="bg-white dark:bg-gray-900 rounded-t-2xl p-4">
-            <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-              Playback Speed
+          <View className="flex-row justify-between mt-1.5">
+            <Text className="text-xs text-gray-500 dark:text-gray-400">
+              {formatTime(displayedPositionMs)}
             </Text>
-            {SPEEDS.map((s) => (
-              <TouchableOpacity
-                key={s}
-                onPress={() => {
-                  controls.setSpeed(s);
-                  onToggleSpeedMenu();
-                }}
-                className={`py-3 px-4 rounded-lg ${
-                  playerState.playbackSpeed === s
-                    ? "bg-orange-50 dark:bg-orange-950/30"
-                    : ""
-                }`}
-              >
-                <Text
-                  className={`text-sm ${playerState.playbackSpeed === s ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
-                >
-                  {s}x
-                </Text>
-              </TouchableOpacity>
-            ))}
+            <Text className="text-xs text-gray-500 dark:text-gray-400">
+              -
+              {formatTime(
+                Math.max(0, playerState.durationMs - displayedPositionMs),
+              )}
+            </Text>
           </View>
-        </TouchableOpacity>
-      </Modal>
+        </View>
 
-      {/* Chapters Modal */}
-      <Modal
-        visible={showChapters}
-        transparent
-        animationType="slide"
-        onRequestClose={onToggleChapters}
-      >
-        <TouchableOpacity
-          className="flex-1 bg-black/40 justify-end"
-          activeOpacity={1}
-          onPress={onToggleChapters}
+        {/* Transport Controls */}
+        <View
+          className="flex-row items-center justify-center py-4 px-6"
+          style={{ gap: 24 }}
         >
-          <View className="bg-white dark:bg-gray-900 rounded-t-2xl max-h-[60%]">
-            <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
-              <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                Chapters
-              </Text>
-              <TouchableOpacity onPress={onToggleChapters}>
-                <Ionicons name="close" size={20} color={mutedColor} />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={book.chapters}
-              keyExtractor={(item) => `ch-${item.index}`}
-              renderItem={({ item }) => {
-                const label =
-                  item.title ||
-                  item.filename?.replace(/\.[^/.]+$/, "") ||
-                  `Chapter ${item.index + 1}`;
-                const isCurrent =
-                  item.index === playerState.currentChapterIndex;
+          <TouchableOpacity onPress={controls.prevChapter} className="p-2">
+            <Ionicons name="play-skip-back" size={24} color={iconColor} />
+          </TouchableOpacity>
 
-                return (
-                  <TouchableOpacity
-                    onPress={() => {
-                      controls.skipToChapter(item.index);
-                      onToggleChapters();
-                    }}
-                    className={`px-4 py-3 flex-row items-center ${
-                      isCurrent ? "bg-orange-50 dark:bg-orange-950/30" : ""
-                    }`}
-                  >
-                    <Text className="text-xs text-gray-500 dark:text-gray-400 w-6 text-right mr-3">
-                      {item.index + 1}
-                    </Text>
-                    <Text
-                      className={`flex-1 text-sm ${isCurrent ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
-                      numberOfLines={1}
-                    >
-                      {label}
-                    </Text>
-                    {isCurrent && (
-                      <Ionicons name="play" size={14} color="#f97316" />
-                    )}
-                  </TouchableOpacity>
-                );
-              }}
+          <TouchableOpacity
+            onPress={() => controls.seekBy(-30000)}
+            className="p-2"
+          >
+            <Ionicons name="play-back" size={28} color={iconColor} />
+            <Text
+              className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
+              style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
+            >
+              30
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={controls.togglePlayPause}
+            className="w-14 h-14 rounded-full bg-primary items-center justify-center"
+            style={{ elevation: 4 }}
+          >
+            <Ionicons
+              name={playerState.isPlaying ? "pause" : "play"}
+              size={24}
+              color="white"
+              style={playerState.isPlaying ? {} : { marginLeft: 2 }}
             />
-          </View>
-        </TouchableOpacity>
-      </Modal>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => controls.seekBy(30000)}
+            className="p-2"
+          >
+            <Ionicons name="play-forward" size={28} color={iconColor} />
+            <Text
+              className="absolute text-center font-bold text-gray-900 dark:text-gray-100"
+              style={{ fontSize: 7, top: 12, left: 0, right: 0 }}
+            >
+              30
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={controls.nextChapter} className="p-2">
+            <Ionicons name="play-skip-forward" size={24} color={iconColor} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom controls */}
+        <View className="flex-row items-center justify-around px-6 py-4 border-t border-gray-200 dark:border-gray-800">
+          <TouchableOpacity
+            onPress={onToggleSpeedMenu}
+            className="items-center"
+          >
+            <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {playerState.playbackSpeed}x
+            </Text>
+            <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Speed
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={onToggleChapters} className="items-center">
+            <Ionicons name="list" size={20} color={iconColor} />
+            <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Chapters
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={onManualSync} className="items-center">
+            <Ionicons name="sync" size={20} color={iconColor} />
+            <Text className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Sync
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Speed Menu Modal */}
+        <Modal
+          visible={showSpeedMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={onToggleSpeedMenu}
+        >
+          <TouchableOpacity
+            className="flex-1 bg-black/40 justify-end"
+            activeOpacity={1}
+            onPress={onToggleSpeedMenu}
+          >
+            <View className="bg-white dark:bg-gray-900 rounded-t-2xl p-4">
+              <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                Playback Speed
+              </Text>
+              {SPEEDS.map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  onPress={() => {
+                    controls.setSpeed(s);
+                    onToggleSpeedMenu();
+                  }}
+                  className={`py-3 px-4 rounded-lg ${
+                    playerState.playbackSpeed === s
+                      ? "bg-orange-50 dark:bg-orange-950/30"
+                      : ""
+                  }`}
+                >
+                  <Text
+                    className={`text-sm ${playerState.playbackSpeed === s ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
+                  >
+                    {s}x
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Chapters Modal */}
+        <Modal
+          visible={showChapters}
+          transparent
+          animationType="slide"
+          onRequestClose={onToggleChapters}
+        >
+          <TouchableOpacity
+            className="flex-1 bg-black/40 justify-end"
+            activeOpacity={1}
+            onPress={onToggleChapters}
+          >
+            <View className="bg-white dark:bg-gray-900 rounded-t-2xl max-h-[60%]">
+              <View className="flex-row items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+                <Text className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  Chapters
+                </Text>
+                <TouchableOpacity onPress={onToggleChapters}>
+                  <Ionicons name="close" size={20} color={mutedColor} />
+                </TouchableOpacity>
+              </View>
+              <FlatList
+                data={book.chapters}
+                keyExtractor={(item) => `ch-${item.index}`}
+                renderItem={({ item }) => {
+                  const label =
+                    item.title ||
+                    item.filename?.replace(/\.[^/.]+$/, "") ||
+                    `Chapter ${item.index + 1}`;
+                  const isCurrent =
+                    item.index === playerState.currentChapterIndex;
+
+                  return (
+                    <TouchableOpacity
+                      onPress={() => {
+                        controls.skipToChapter(item.index);
+                        onToggleChapters();
+                      }}
+                      className={`px-4 py-3 flex-row items-center ${
+                        isCurrent ? "bg-orange-50 dark:bg-orange-950/30" : ""
+                      }`}
+                    >
+                      <Text className="text-xs text-gray-500 dark:text-gray-400 w-6 text-right mr-3">
+                        {item.index + 1}
+                      </Text>
+                      <Text
+                        className={`flex-1 text-sm ${isCurrent ? "text-primary font-medium" : "text-gray-900 dark:text-gray-100"}`}
+                        numberOfLines={1}
+                      >
+                        {label}
+                      </Text>
+                      {isCurrent && (
+                        <Ionicons name="play" size={14} color="#f97316" />
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </View>
     </AppScreen>
   );

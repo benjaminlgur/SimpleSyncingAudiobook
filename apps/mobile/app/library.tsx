@@ -1,6 +1,19 @@
+import {
+  registerDeviceOnce,
+  forgetDeviceRegistration,
+} from "@audiobook/shared";
+import {
+  loadScopedLibrary,
+  findLegacyHostedScopedKey,
+} from "../lib/libraryStorage";
 import { useContext } from "react";
 import { CloudContext } from "@audiobook/shared/react";
 import { importAudio } from "../lib/importAudio";
+import { removeImportedAudio } from "../lib/removeImportedAudio";
+import {
+  getPlaybackSession,
+  stopPlaybackSession,
+} from "../lib/playbackSession";
 import { useState, useEffect, useCallback } from "react";
 import {
   View,
@@ -13,14 +26,16 @@ import {
   Image,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCloudMutation as useMutation, useCloudQuery as useQuery } from "@audiobook/shared/react";
+import {
+  useCloudMutation as useMutation,
+  useCloudQuery as useQuery,
+} from "@audiobook/shared/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system";
-import { computeChecksum } from "@audiobook/shared";
-import type { AudiobookMeta, ChapterInfo, FileInfo } from "@audiobook/shared";
+import * as FileSystem from "expo-file-system/legacy";
+import type { AudiobookMeta, ChapterInfo } from "@audiobook/shared";
 import { useConvexContext } from "./_layout";
 import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
@@ -95,7 +110,9 @@ function BookThumbnail({ book }: { book: LocalAudiobook }) {
   return (
     <View
       className={`w-12 h-12 rounded-lg items-center justify-center mr-3 ${
-        book.missing ? "bg-red-50 dark:bg-red-950/30" : "bg-orange-50 dark:bg-orange-950/30"
+        book.missing
+          ? "bg-red-50 dark:bg-red-950/30"
+          : "bg-orange-50 dark:bg-orange-950/30"
       }`}
     >
       <Ionicons
@@ -140,91 +157,6 @@ function getFolderNameFromUri(uri: string): string | null {
     : lastSegment;
   const name = afterColon.split("/").filter(Boolean).pop();
   return name || null;
-}
-
-async function readStoredLibrary(storageKey: string): Promise<LocalAudiobook[]> {
-  const stored = await AsyncStorage.getItem(storageKey);
-  if (!stored) return [];
-
-  try {
-    return JSON.parse(stored) as LocalAudiobook[];
-  } catch {
-    return [];
-  }
-}
-
-function getHostedScopeMigrationMatch(scope: string): {
-  keyPrefix: string;
-  userMarker: string;
-} | null {
-  if (!scope.startsWith("hosted:")) {
-    return null;
-  }
-
-  const [, encodedUrl, encodedUserId] = scope.split(":");
-  if (!encodedUrl || !encodedUserId) {
-    return null;
-  }
-
-  const userId = decodeUriValue(encodedUserId);
-  return {
-    keyPrefix: `hosted:${encodedUrl}:`,
-    userMarker: `%7C${userId}%7C`,
-  };
-}
-
-async function findLegacyHostedScopedKey(
-  baseKey: string,
-  scope: string,
-): Promise<string | null> {
-  const match = getHostedScopeMigrationMatch(scope);
-  if (!match) {
-    return null;
-  }
-
-  const keys = await AsyncStorage.getAllKeys();
-  return (
-    keys.find(
-      (key) =>
-        key.startsWith(`${baseKey}:${match.keyPrefix}`) &&
-        key.includes(match.userMarker),
-    ) ?? null
-  );
-}
-
-async function loadScopedLibrary(
-  storageKey: string,
-  storageScope: string,
-  legacyKey?: string,
-): Promise<LocalAudiobook[]> {
-  const scopedStored = await AsyncStorage.getItem(storageKey);
-  if (scopedStored !== null) {
-    return readStoredLibrary(storageKey);
-  }
-
-  const legacyHostedKey = await findLegacyHostedScopedKey(LIBRARY_KEY, storageScope);
-  if (legacyHostedKey) {
-    const hostedLibrary = await readStoredLibrary(legacyHostedKey);
-    if (hostedLibrary.length > 0) {
-      await AsyncStorage.setItem(storageKey, JSON.stringify(hostedLibrary));
-    }
-    return hostedLibrary;
-  }
-
-  if (!legacyKey) {
-    return [];
-  }
-
-  const legacyStored = await AsyncStorage.getItem(legacyKey);
-  if (legacyStored === null) {
-    return [];
-  }
-
-  const legacyLibrary = await readStoredLibrary(legacyKey);
-  if (legacyLibrary.length > 0) {
-    await AsyncStorage.setItem(storageKey, JSON.stringify(legacyLibrary));
-  }
-  return legacyLibrary;
 }
 
 async function getOrCreateScopedDeviceId(
@@ -365,18 +297,22 @@ export default function LibraryScreen() {
     }, [reloadLibraryState]),
   );
 
-  const saveLibrary = useCallback(async (books: LocalAudiobook[]) => {
-    setLibrary(books);
-    if (libraryStorageKey) {
-      await AsyncStorage.setItem(libraryStorageKey, JSON.stringify(books));
-    }
-  }, [libraryStorageKey]);
+  const saveLibrary = useCallback(
+    async (books: LocalAudiobook[]) => {
+      setLibrary(books);
+      if (libraryStorageKey) {
+        await AsyncStorage.setItem(libraryStorageKey, JSON.stringify(books));
+      }
+    },
+    [libraryStorageKey],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     const pruneBooksMissingInDatabase = async () => {
-      if (!cloudReady || !client || !storageReady || library.length === 0) return;
+      if (!cloudReady || !client || !storageReady || library.length === 0)
+        return;
 
       const booksWithConvexId = library.filter((book) => !!book.convexId);
       if (booksWithConvexId.length === 0) return;
@@ -406,12 +342,12 @@ export default function LibraryScreen() {
         return;
       }
 
-      const updated = library
-        .map((book) =>
-          (missingKeys.has(`${book.name}::${book.checksum}`) || invalidIdKeys.has(`${book.name}::${book.checksum}`))
-            ? { ...book, convexId: undefined }
-            : book,
-        );
+      const updated = library.map((book) =>
+        missingKeys.has(`${book.name}::${book.checksum}`) ||
+        invalidIdKeys.has(`${book.name}::${book.checksum}`)
+          ? { ...book, convexId: undefined }
+          : book,
+      );
       await saveLibrary(updated);
     };
 
@@ -425,12 +361,14 @@ export default function LibraryScreen() {
     let cancelled = false;
 
     const registerLocalBooks = async () => {
-      if (!storageReady || !deviceId || library.length === 0) return;
+      if (!cloudReady || !storageReady || !deviceId || library.length === 0)
+        return;
 
       const updated = [...library];
       let changed = false;
 
       for (let i = 0; i < updated.length; i += 1) {
+        if (cancelled) return;
         const book = updated[i];
         let audiobookId = book.convexId;
 
@@ -450,11 +388,13 @@ export default function LibraryScreen() {
         }
 
         try {
-          await registerOnDevice({
-            audiobookId: audiobookId as Id<"audiobooks">,
-            deviceId,
-            platform: "mobile",
-          });
+          await registerDeviceOnce(deviceId, audiobookId, () =>
+            registerOnDevice({
+              audiobookId: audiobookId as Id<"audiobooks">,
+              deviceId,
+              platform: "mobile",
+            }),
+          );
         } catch {
           // Best effort while offline.
         }
@@ -469,9 +409,18 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [cloudReady, deviceId, getOrCreate, library, registerOnDevice, saveLibrary, storageReady]);
+  }, [
+    cloudReady,
+    deviceId,
+    getOrCreate,
+    library,
+    registerOnDevice,
+    saveLibrary,
+    storageReady,
+  ]);
 
   const handlePickFolder = async () => {
+    let discard: (() => Promise<void>) | undefined;
     setIsScanning(true);
     try {
       let audioFiles: PickedAudioFile[] = [];
@@ -495,7 +444,7 @@ export default function LibraryScreen() {
               const name = getNameFromUri(uri);
               if (!isAudioFile(name)) return null;
 
-              const info = await FileSystem.getInfoAsync(uri, { size: true });
+              const info = await FileSystem.getInfoAsync(uri);
               if (!info.exists || info.isDirectory) return null;
 
               return {
@@ -539,6 +488,7 @@ export default function LibraryScreen() {
       audioFiles.sort((a, b) => a.name.localeCompare(b.name));
 
       const imported = await importAudio(audioFiles);
+      discard = imported.discard;
       audioFiles = imported.files;
       const checksum = imported.checksum;
 
@@ -572,14 +522,20 @@ export default function LibraryScreen() {
       }
 
       await saveLibrary([...library, meta]);
+      discard = undefined;
     } catch (err) {
-      Alert.alert("Import failed", err instanceof Error ? err.message : "Unable to import files");
+      await discard?.().catch(() => {});
+      Alert.alert(
+        "Import failed",
+        err instanceof Error ? err.message : "Unable to import files",
+      );
     } finally {
       setIsScanning(false);
     }
   };
 
   const handlePickM4b = async () => {
+    let discard: (() => Promise<void>) | undefined;
     setIsScanning(true);
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -601,7 +557,10 @@ export default function LibraryScreen() {
       }
 
       const bookName = asset.name.replace(/\.[^/.]+$/, "");
-      const imported = await importAudio([{ uri: asset.uri, name: asset.name, size: asset.size || 0 }]);
+      const imported = await importAudio([
+        { uri: asset.uri, name: asset.name, size: asset.size || 0 },
+      ]);
+      discard = imported.discard;
       const checksum = imported.checksum;
 
       const chapters: ChapterInfo[] = [
@@ -634,8 +593,13 @@ export default function LibraryScreen() {
       }
 
       await saveLibrary([...library, meta]);
+      discard = undefined;
     } catch (err) {
-      Alert.alert("Import failed", err instanceof Error ? err.message : "Unable to import file");
+      await discard?.().catch(() => {});
+      Alert.alert(
+        "Import failed",
+        err instanceof Error ? err.message : "Unable to import file",
+      );
     } finally {
       setIsScanning(false);
     }
@@ -652,6 +616,7 @@ export default function LibraryScreen() {
           style: "destructive",
           onPress: async () => {
             if (deviceId && book.convexId) {
+              forgetDeviceRegistration(deviceId, book.convexId);
               try {
                 await removeFromDevice({
                   audiobookId: book.convexId as Id<"audiobooks">,
@@ -665,7 +630,24 @@ export default function LibraryScreen() {
             const updated = library.filter(
               (b) => !(b.name === book.name && b.checksum === book.checksum),
             );
-            await saveLibrary(updated);
+            try {
+              const key = `${storageScope}:${book.name}::${book.checksum}`;
+              if (getPlaybackSession()?.key === key)
+                await stopPlaybackSession();
+              if (!libraryStorageKey)
+                throw new Error("Library storage unavailable");
+              await removeImportedAudio(
+                book.folderPath,
+                libraryStorageKey,
+                updated,
+              );
+              await saveLibrary(updated);
+            } catch (error) {
+              Alert.alert(
+                "Unable to finish removal",
+                error instanceof Error ? error.message : "Please try again.",
+              );
+            }
           },
         },
       ],
@@ -696,259 +678,291 @@ export default function LibraryScreen() {
   return (
     <AppScreen isDark={isDark}>
       <View className="flex-1">
-      {/* Header */}
-      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200 dark:border-gray-800">
-        <Text className="text-xl font-bold text-gray-900 dark:text-gray-100">Library</Text>
-        <TouchableOpacity onPress={() => router.push("/settings")}>
-          <Ionicons name="settings-outline" size={22} color={isDark ? "#9ca3af" : "#6b7280"} />
-        </TouchableOpacity>
-      </View>
+        {/* Header */}
+        <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200 dark:border-gray-800">
+          <Text className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            Library
+          </Text>
+          <TouchableOpacity onPress={() => router.push("/settings")}>
+            <Ionicons
+              name="settings-outline"
+              size={22}
+              color={isDark ? "#9ca3af" : "#6b7280"}
+            />
+          </TouchableOpacity>
+        </View>
 
-      <ScrollView
-        className="flex-1 px-4 py-4"
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={() => {
-              void handleRefresh();
-            }}
-            tintColor={isDark ? "#9ca3af" : "#6b7280"}
-          />
-        }
-      >
-        {library.length === 0 && remoteOnlyCount === 0 ? (
-          <View className="items-center justify-center py-20">
-            <Ionicons name="book-outline" size={48} color={isDark ? "#4b5563" : "#d1d5db"} />
-            <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
-              No audiobooks yet
-            </Text>
-            <Text className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-              Add audio files to get started
-            </Text>
-          </View>
-        ) : (
-          library.map((book) => (
-            <TouchableOpacity
-              key={`${book.name}-${book.checksum}`}
-              onPress={() => {
-                if (book.missing) {
-                  Alert.alert(
-                    "Files Missing",
-                    `The audio files for "${book.name}" can no longer be found. They may have been moved or deleted.\n\nPlease re-add the audiobook from its new location.`,
-                    [
-                      { text: "OK", style: "cancel" },
-                      {
-                        text: "Remove",
-                        style: "destructive",
-                        onPress: () => handleRemove(book),
-                      },
-                    ],
-                    { cancelable: true },
-                  );
-                  return;
-                }
-                router.push({
-                  pathname: "/player",
-                  params: {
-                    bookKey: `${book.name}::${book.checksum}`,
-                  },
-                });
+        <ScrollView
+          className="flex-1 px-4 py-4"
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                void handleRefresh();
               }}
-              onLongPress={() => {
-                if (book.convexId) {
-                  Alert.alert(
-                    book.name,
-                    "Choose an action",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Link/Unlink",
-                        onPress: () => setLinkingBook(book),
-                      },
-                      {
-                        text: "Remove",
-                        style: "destructive",
-                        onPress: () => handleRemove(book),
-                      },
-                    ],
-                    { cancelable: true },
-                  );
-                } else {
-                  handleRemove(book);
-                }
-              }}
-              className="flex-row items-center p-4 mb-2 rounded-xl border bg-white dark:bg-gray-900"
-              style={{ borderColor: book.missing ? "#fca5a5" : (isDark ? "#374151" : "#e5e7eb") }}
-            >
-              <BookThumbnail book={book} />
-              <View className="flex-1">
-                <Text
-                  className={`text-sm font-medium ${
-                    book.missing
-                      ? "text-gray-400 dark:text-gray-500"
-                      : "text-gray-900 dark:text-gray-100"
-                  }`}
-                  numberOfLines={1}
-                >
-                  {book.name}
-                </Text>
-                {book.missing ? (
-                  <Text className="text-xs text-red-500">
-                    Files missing — tap to learn more
-                  </Text>
-                ) : (
-                  <Text className="text-xs text-gray-500 dark:text-gray-400">
-                    {book.chapters.length} chapter
-                    {book.chapters.length !== 1 ? "s" : ""}
-                    {book.convexId ? (
-                      <Text className="text-green-600 dark:text-green-400"> · Synced</Text>
-                    ) : (
-                      <Text className="text-yellow-600 dark:text-yellow-400"> · Local</Text>
-                    )}
-                  </Text>
-                )}
-              </View>
+              tintColor={isDark ? "#9ca3af" : "#6b7280"}
+            />
+          }
+        >
+          {library.length === 0 && remoteOnlyCount === 0 ? (
+            <View className="items-center justify-center py-20">
               <Ionicons
-                name={book.missing ? "alert-circle" : "chevron-forward"}
-                size={16}
-                color={book.missing ? "#ef4444" : (isDark ? "#6b7280" : "#9ca3af")}
+                name="book-outline"
+                size={48}
+                color={isDark ? "#4b5563" : "#d1d5db"}
               />
-            </TouchableOpacity>
-          ))
-        )}
-
-        {remoteOnlyBooks && remoteOnlyBooks.length > 0 && (
-          <View className="mt-6">
-            <View className="flex-row items-center mb-3">
-              <Ionicons name="cloud-outline" size={16} color={isDark ? "#9ca3af" : "#6b7280"} />
-              <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 ml-1.5 uppercase tracking-wide">
-                On another device ({remoteOnlyBooks.length})
+              <Text className="text-sm text-gray-500 dark:text-gray-400 mt-4">
+                No audiobooks yet
+              </Text>
+              <Text className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                Add audio files to get started
               </Text>
             </View>
-            {remoteOnlyBooks.map((book) => (
-              <View
-                key={`remote-${book._id}`}
-                className="p-4 mb-2 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30"
+          ) : (
+            library.map((book) => (
+              <TouchableOpacity
+                key={`${book.name}-${book.checksum}`}
+                onPress={() => {
+                  if (book.missing) {
+                    Alert.alert(
+                      "Files Missing",
+                      `The audio files for "${book.name}" can no longer be found. They may have been moved or deleted.\n\nPlease re-add the audiobook from its new location.`,
+                      [
+                        { text: "OK", style: "cancel" },
+                        {
+                          text: "Remove",
+                          style: "destructive",
+                          onPress: () => handleRemove(book),
+                        },
+                      ],
+                      { cancelable: true },
+                    );
+                    return;
+                  }
+                  router.push({
+                    pathname: "/player",
+                    params: {
+                      bookKey: `${book.name}::${book.checksum}`,
+                    },
+                  });
+                }}
+                onLongPress={() => {
+                  if (book.convexId) {
+                    Alert.alert(
+                      book.name,
+                      "Choose an action",
+                      [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "Link/Unlink",
+                          onPress: () => setLinkingBook(book),
+                        },
+                        {
+                          text: "Remove",
+                          style: "destructive",
+                          onPress: () => handleRemove(book),
+                        },
+                      ],
+                      { cancelable: true },
+                    );
+                  } else {
+                    handleRemove(book);
+                  }
+                }}
+                className="flex-row items-center p-4 mb-2 rounded-xl border bg-white dark:bg-gray-900"
+                style={{
+                  borderColor: book.missing
+                    ? "#fca5a5"
+                    : isDark
+                      ? "#374151"
+                      : "#e5e7eb",
+                }}
               >
-                <View className="flex-row items-center">
-                  <View className="w-12 h-12 rounded-lg items-center justify-center mr-3 bg-indigo-100 dark:bg-indigo-900/50">
-                    <Ionicons name="cloud-outline" size={24} color="#818cf8" />
-                  </View>
-                  <View className="flex-1">
-                    <Text
-                      className="text-sm font-medium text-gray-500 dark:text-gray-400"
-                      numberOfLines={1}
-                    >
-                      {book.name}
+                <BookThumbnail book={book} />
+                <View className="flex-1">
+                  <Text
+                    className={`text-sm font-medium ${
+                      book.missing
+                        ? "text-gray-400 dark:text-gray-500"
+                        : "text-gray-900 dark:text-gray-100"
+                    }`}
+                    numberOfLines={1}
+                  >
+                    {book.name}
+                  </Text>
+                  {book.missing ? (
+                    <Text className="text-xs text-red-500">
+                      Files missing — tap to learn more
                     </Text>
-                    <Text className="text-xs text-gray-400 dark:text-gray-500">
+                  ) : (
+                    <Text className="text-xs text-gray-500 dark:text-gray-400">
                       {book.chapters.length} chapter
-                      {book.chapters.length !== 1 ? "s" : ""} · Add local files
-                      to listen
+                      {book.chapters.length !== 1 ? "s" : ""}
+                      {book.convexId ? (
+                        <Text className="text-green-600 dark:text-green-400">
+                          {" "}
+                          · Synced
+                        </Text>
+                      ) : (
+                        <Text className="text-yellow-600 dark:text-yellow-400">
+                          {" "}
+                          · Local
+                        </Text>
+                      )}
                     </Text>
+                  )}
+                </View>
+                <Ionicons
+                  name={book.missing ? "alert-circle" : "chevron-forward"}
+                  size={16}
+                  color={
+                    book.missing ? "#ef4444" : isDark ? "#6b7280" : "#9ca3af"
+                  }
+                />
+              </TouchableOpacity>
+            ))
+          )}
+
+          {remoteOnlyBooks && remoteOnlyBooks.length > 0 && (
+            <View className="mt-6">
+              <View className="flex-row items-center mb-3">
+                <Ionicons
+                  name="cloud-outline"
+                  size={16}
+                  color={isDark ? "#9ca3af" : "#6b7280"}
+                />
+                <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 ml-1.5 uppercase tracking-wide">
+                  On another device ({remoteOnlyBooks.length})
+                </Text>
+              </View>
+              {remoteOnlyBooks.map((book) => (
+                <View
+                  key={`remote-${book._id}`}
+                  className="p-4 mb-2 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30"
+                >
+                  <View className="flex-row items-center">
+                    <View className="w-12 h-12 rounded-lg items-center justify-center mr-3 bg-indigo-100 dark:bg-indigo-900/50">
+                      <Ionicons
+                        name="cloud-outline"
+                        size={24}
+                        color="#818cf8"
+                      />
+                    </View>
+                    <View className="flex-1">
+                      <Text
+                        className="text-sm font-medium text-gray-500 dark:text-gray-400"
+                        numberOfLines={1}
+                      >
+                        {book.name}
+                      </Text>
+                      <Text className="text-xs text-gray-400 dark:text-gray-500">
+                        {book.chapters.length} chapter
+                        {book.chapters.length !== 1 ? "s" : ""} · Add local
+                        files to listen
+                      </Text>
+                    </View>
+                  </View>
+                  <View className="flex-row mt-3" style={{ marginLeft: 60 }}>
+                    <TouchableOpacity
+                      onPress={() =>
+                        Alert.alert(
+                          "Not on this device",
+                          `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`,
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-md border mr-2 border-indigo-300 dark:border-indigo-800"
+                    >
+                      <Text className="text-xs text-indigo-500 dark:text-indigo-400">
+                        Info
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() =>
+                        Alert.alert(
+                          "Remove from database",
+                          `Remove \"${book.name}\" from the shared database for all devices?`,
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                              text: "Remove",
+                              style: "destructive",
+                              onPress: async () => {
+                                try {
+                                  await removeFromDatabase({ id: book._id });
+                                } catch {
+                                  Alert.alert(
+                                    "Unable to remove",
+                                    "Couldn't remove this audiobook from the database right now.",
+                                  );
+                                }
+                              },
+                            },
+                          ],
+                          { cancelable: true },
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-md border border-red-300 dark:border-red-900"
+                    >
+                      <Text className="text-xs text-red-600 dark:text-red-400">
+                        Remove
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
-                <View className="flex-row mt-3" style={{ marginLeft: 60 }}>
-                  <TouchableOpacity
-                    onPress={() =>
-                      Alert.alert(
-                        "Not on this device",
-                        `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`,
-                      )
-                    }
-                    className="px-3 py-1.5 rounded-md border mr-2 border-indigo-300 dark:border-indigo-800"
-                  >
-                    <Text className="text-xs text-indigo-500 dark:text-indigo-400">
-                      Info
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() =>
-                      Alert.alert(
-                        "Remove from database",
-                        `Remove \"${book.name}\" from the shared database for all devices?`,
-                        [
-                          { text: "Cancel", style: "cancel" },
-                          {
-                            text: "Remove",
-                            style: "destructive",
-                            onPress: async () => {
-                              try {
-                                await removeFromDatabase({ id: book._id });
-                              } catch {
-                                Alert.alert(
-                                  "Unable to remove",
-                                  "Couldn't remove this audiobook from the database right now.",
-                                );
-                              }
-                            },
-                          },
-                        ],
-                        { cancelable: true },
-                      )
-                    }
-                    className="px-3 py-1.5 rounded-md border border-red-300 dark:border-red-900"
-                  >
-                    <Text className="text-xs text-red-600 dark:text-red-400">
-                      Remove
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
+              ))}
+            </View>
+          )}
 
-        {remoteOnlyBooks === undefined && library.length === 0 && (
-          <View className="items-center py-4">
-            <Text className="text-xs text-gray-400 dark:text-gray-500">
-              Unable to check other devices right now
-            </Text>
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Add buttons */}
-      <View className="p-4 border-t border-gray-200 dark:border-gray-800">
-        {isScanning ? (
-          <View className="bg-gray-200 dark:bg-gray-800 rounded-xl py-3.5 items-center">
-            <Text className="text-gray-500 dark:text-gray-400 font-medium text-sm">
-              Scanning...
-            </Text>
-          </View>
-        ) : (
-          <View className="flex-row gap-2">
-            <TouchableOpacity
-              onPress={handlePickFolder}
-              className="flex-1 bg-primary rounded-xl py-3.5 items-center flex-row justify-center"
-            >
-              <Ionicons name="folder-open-outline" size={18} color="white" />
-              <Text className="text-white font-medium text-sm ml-1">
-                Add Folder
+          {remoteOnlyBooks === undefined && library.length === 0 && (
+            <View className="items-center py-4">
+              <Text className="text-xs text-gray-400 dark:text-gray-500">
+                Unable to check other devices right now
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handlePickM4b}
-              className="flex-1 rounded-xl py-3.5 items-center flex-row justify-center border border-primary"
-            >
-              <Ionicons name="document-outline" size={18} color="#f97316" />
-              <Text className="text-primary font-medium text-sm ml-1">
-                Add M4B
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
+            </View>
+          )}
+        </ScrollView>
 
-      {linkingBook?.convexId && (
-        <LinkingModal
-          visible={!!linkingBook}
-          audiobookId={linkingBook.convexId}
-          audiobookName={linkingBook.name}
-          onLinksChanged={() => setRefreshToken((prev) => prev + 1)}
-          onClose={() => setLinkingBook(null)}
-        />
-      )}
+        {/* Add buttons */}
+        <View className="p-4 border-t border-gray-200 dark:border-gray-800">
+          {isScanning ? (
+            <View className="bg-gray-200 dark:bg-gray-800 rounded-xl py-3.5 items-center">
+              <Text className="text-gray-500 dark:text-gray-400 font-medium text-sm">
+                Scanning...
+              </Text>
+            </View>
+          ) : (
+            <View className="flex-row gap-2">
+              <TouchableOpacity
+                onPress={handlePickFolder}
+                className="flex-1 bg-primary rounded-xl py-3.5 items-center flex-row justify-center"
+              >
+                <Ionicons name="folder-open-outline" size={18} color="white" />
+                <Text className="text-white font-medium text-sm ml-1">
+                  Add Folder
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handlePickM4b}
+                className="flex-1 rounded-xl py-3.5 items-center flex-row justify-center border border-primary"
+              >
+                <Ionicons name="document-outline" size={18} color="#f97316" />
+                <Text className="text-primary font-medium text-sm ml-1">
+                  Add M4B
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {linkingBook?.convexId && (
+          <LinkingModal
+            visible={!!linkingBook}
+            audiobookId={linkingBook.convexId}
+            audiobookName={linkingBook.name}
+            onLinksChanged={() => setRefreshToken((prev) => prev + 1)}
+            onClose={() => setLinkingBook(null)}
+          />
+        )}
       </View>
     </AppScreen>
   );

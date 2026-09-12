@@ -12,7 +12,7 @@ test.each([
   { legacy: false, queryFirst: true },
   { legacy: true, queryFirst: false },
   { legacy: true, queryFirst: true },
-])("stale offline listening preserves cloud progress (legacy=$legacy, queryFirst=$queryFirst)", async ({ legacy, queryFirst }) => {
+].flatMap((scenario) => [5000, 120000, 300000].map((listenedMs) => ({ ...scenario, listenedMs }))))("stale offline listening preserves cloud progress (legacy=$legacy, queryFirst=$queryFirst, listenedMs=$listenedMs)", async ({ legacy, queryFirst, listenedMs }) => {
   vi.stubEnv("REQUIRE_AUTH", "false");
   vi.stubEnv("SYNC_ACCESS_KEY", "integration-secret-".repeat(3));
   const syncKey = process.env.SYNC_ACCESS_KEY;
@@ -46,13 +46,13 @@ test.each([
     await engine.initialize();
     vi.spyOn(Date, "now").mockReturnValue(server.updatedAt + 120000);
     await engine.onPlay();
-    engine.updatePosition(0, 3720000); // Two minutes of listening to the stale copy.
+    engine.updatePosition(0, 3600000 + listenedMs); // Seconds to minutes of listening to the stale copy.
     expect(engine.getState().pending!.updatedAt).toBeGreaterThan(server.updatedAt);
     if (queryFirst) engine.reconcilePosition(server);
     await engine.onReconnect();
     expect(await t.query(api.positions.get, { syncKey, audiobookId })).toMatchObject({ positionMs: 7200000, revision: server.revision });
     expect(engine.getState().conflict).toMatchObject({ positionMs: 7200000, revision: server.revision });
-    engine.updatePosition(0, 3780000); // Continued listening cannot bypass the conflict.
+    engine.updatePosition(0, 3600000 + listenedMs + 60000); // Continued listening cannot bypass the conflict.
     await engine.manualSync();
     expect(await t.query(api.positions.get, { syncKey, audiobookId })).toMatchObject({ positionMs: 7200000, revision: server.revision });
     await engine.resolveConflict("remote");

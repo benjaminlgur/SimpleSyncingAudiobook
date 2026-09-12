@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAudioPlayer, type AudioPlayerControls } from "./useAudioPlayer";
+import { loadAudioFileAsBlob } from "../lib/tauri-fs";
 
 vi.mock("../lib/tauri-fs", () => ({
   loadAudioFileAsBlob: vi.fn(async () => "blob:audio"),
@@ -16,40 +17,93 @@ class FakeAudio extends EventTarget {
   currentTime = 0;
   duration = 100;
   playbackRate = 1;
-  load() { this.dispatchEvent(new Event("loadedmetadata")); }
-  pause() { this.paused = true; }
-  async play() { this.paused = false; }
+  load() {
+    this.dispatchEvent(new Event("loadedmetadata"));
+  }
+  pause() {
+    this.paused = true;
+  }
+  async play() {
+    this.paused = false;
+  }
 }
 
 let renderer: ReactTestRenderer;
-beforeEach(() => { vi.stubGlobal("Audio", FakeAudio); });
-afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
+beforeEach(() => {
+  vi.stubGlobal("Audio", FakeAudio);
+});
+afterEach(() => {
+  act(() => renderer?.unmount());
+  vi.unstubAllGlobals();
+});
 
 async function mount() {
   let controls!: AudioPlayerControls;
   const update = vi.fn();
   const flush = vi.fn();
-  const chapters = [{ index: 0, filename: "1.mp3" }, { index: 1, filename: "2.mp3" }];
+  const chapters = [
+    { index: 0, filename: "1.mp3" },
+    { index: 1, filename: "2.mp3" },
+  ];
   function Player() {
-    [, controls] = useAudioPlayer({ folderPath: "books", chapters, onPositionUpdate: update, onChapterChange: flush });
+    [, controls] = useAudioPlayer({
+      folderPath: "books",
+      chapters,
+      onPositionUpdate: update,
+      onChapterChange: flush,
+      onSeek: flush,
+    });
     return null;
   }
-  await act(async () => { renderer = create(createElement(Player)); });
-  return { get controls() { return controls; }, update, flush };
+  await act(async () => {
+    renderer = create(createElement(Player));
+  });
+  return {
+    get controls() {
+      return controls;
+    },
+    update,
+    flush,
+  };
 }
 
 test("a paused seek records the new location before requesting a flush", async () => {
   const player = await mount();
   act(() => player.controls.seekTo(15000));
   expect(player.update).toHaveBeenLastCalledWith(0, 15000);
-  expect(player.update.mock.invocationCallOrder[0]).toBeLessThan(player.flush.mock.invocationCallOrder[0]);
+  expect(player.update.mock.invocationCallOrder[0]).toBeLessThan(
+    player.flush.mock.invocationCallOrder[0],
+  );
   act(() => player.controls.seekBy(30000));
   expect(player.update).toHaveBeenLastCalledWith(0, 45000);
 });
 
 test("a paused chapter change publishes the loaded chapter, not the old chapter", async () => {
   const player = await mount();
-  await act(async () => { player.controls.skipToChapter(1, 3000); });
+  await act(async () => {
+    player.controls.skipToChapter(1, 3000);
+  });
   expect(player.update).toHaveBeenLastCalledWith(1, 3000);
-  expect(player.update.mock.invocationCallOrder[0]).toBeLessThan(player.flush.mock.invocationCallOrder[0]);
+  expect(player.update.mock.invocationCallOrder[0]).toBeLessThan(
+    player.flush.mock.invocationCallOrder[0],
+  );
+});
+
+test("a superseded remote restore rejects instead of authorizing stale progress", async () => {
+  const player = await mount();
+  let finishLoad!: (url: string) => void;
+  vi.mocked(loadAudioFileAsBlob).mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finishLoad = resolve;
+      }),
+  );
+  await act(async () => {
+    const restoring = player.controls.restorePosition(1, 50000);
+    const rejected = expect(restoring).rejects.toThrow("superseded");
+    await player.controls.skipToChapter(0, 2000);
+    finishLoad("blob:chapter2");
+    await rejected;
+  });
+  expect(player.update).toHaveBeenLastCalledWith(0, 2000);
 });

@@ -53,12 +53,22 @@ export interface StorageAdapter {
 export interface SyncPushResult {
   accepted: boolean;
   revision?: number;
-  serverPosition: { chapterIndex: number; positionMs: number; updatedAt: number; revision?: number } | null;
+  serverPosition: {
+    chapterIndex: number;
+    positionMs: number;
+    updatedAt: number;
+    revision?: number;
+  } | null;
 }
 
-export type SyncPushFn = (position: PlaybackPosition) => Promise<SyncPushResult>;
+export type SyncPushFn = (
+  position: PlaybackPosition,
+) => Promise<SyncPushResult>;
 
-export type OnRemoteNewerFn = (remote: { chapterIndex: number; positionMs: number }) => void | Promise<void>;
+export type OnRemoteNewerFn = (remote: {
+  chapterIndex: number;
+  positionMs: number;
+}) => void | Promise<void>;
 
 export interface FileInfo {
   name: string;

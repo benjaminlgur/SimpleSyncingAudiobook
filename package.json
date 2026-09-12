@@ -11,30 +11,41 @@
     "ios": "pnpm --filter @audiobook/mobile ios",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p convex/tsconfig.json && tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/mobile/tsconfig.json",
-    "verify": "pnpm typecheck && pnpm test && pnpm build:desktop && pnpm --filter @audiobook/mobile exec expo export --platform android"
+    "verify": "pnpm check:encoding && pnpm lint && pnpm typecheck && pnpm test && pnpm build:desktop && pnpm --filter @audiobook/mobile exec expo export --platform android --max-workers 4",
+    "lint": "eslint apps packages",
+    "format": "prettier --write --ignore-unknown apps packages scripts .github *.json eslint.config.mjs vitest.config.mts",
+    "format:check": "prettier --check --ignore-unknown apps packages scripts .github *.json eslint.config.mjs vitest.config.mts",
+    "check:encoding": "node scripts/check-encoding.cjs"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^25.5.0",
-    "@types/react-test-renderer": "18.3.1",
+    "@types/react-test-renderer": "^19.1.0",
     "convex": "^1.45.0",
     "convex-test": "^0.0.56",
-    "react-test-renderer": "18.3.1",
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
+    "react-test-renderer": "19.1.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^5.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
-    ]
+      "esbuild",
+      "@sentry/cli"
+    ],
+    "patchedDependencies": {
+      "react-native-track-player@4.1.2": "patches/react-native-track-player@4.1.2.patch"
+    }
   },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "dependencies": {
     "@auth/core": "0.37.0",
     "@convex-dev/auth": "^0.0.91",
     "@convex-dev/rate-limiter": "^0.3.2",
-    "expo": "~52.0.49",
-    "react": "18.3.1",
-    "react-native": "0.76.9"
+    "expo": "~54.0.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
   }
 }

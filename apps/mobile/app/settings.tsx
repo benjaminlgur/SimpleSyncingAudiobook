@@ -4,12 +4,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexContext } from "./_layout";
 import { AppScreen } from "../components/AppScreen";
+import { UpdateButton } from "../components/UpdateButton";
 import { useTheme } from "../hooks/useTheme";
 import { stopPlaybackSession } from "../lib/playbackSession";
 
 type ThemePreference = "light" | "dark" | "system";
 
-const THEME_OPTIONS: { value: ThemePreference; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+const THEME_OPTIONS: {
+  value: ThemePreference;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
   { value: "light", label: "Light", icon: "sunny-outline" },
   { value: "dark", label: "Dark", icon: "moon-outline" },
   { value: "system", label: "System", icon: "phone-portrait-outline" },
@@ -17,7 +22,6 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: keyof typeof
 
 function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
   const { signOut } = useAuthActions();
-  const { isDark } = useTheme();
 
   const handleSignOut = async () => {
     try {
@@ -58,7 +62,8 @@ function DisconnectButton({ onDisconnect }: { onDisconnect: () => void }) {
         </Text>
       </TouchableOpacity>
       <Text className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-        This will remove the saved deployment URL and return to the setup screen.
+        This will remove the saved deployment URL and return to the setup
+        screen.
       </Text>
     </>
   );
@@ -77,19 +82,28 @@ export default function SettingsScreen() {
 
   return (
     <AppScreen isDark={isDark}>
+      <UpdateButton />
       <View className="flex-1">
         <View className="px-4 pt-2 pb-3 flex-row items-center border-b border-gray-200 dark:border-gray-800">
           <TouchableOpacity
             onPress={() => router.back()}
             className="flex-row items-center"
           >
-            <Ionicons name="chevron-back" size={20} color={isDark ? "#9ca3af" : "#6b7280"} />
-            <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">Library</Text>
+            <Ionicons
+              name="chevron-back"
+              size={20}
+              color={isDark ? "#9ca3af" : "#6b7280"}
+            />
+            <Text className="text-sm text-gray-500 dark:text-gray-400 ml-1">
+              Library
+            </Text>
           </TouchableOpacity>
         </View>
 
         <View className="flex-1 px-4 pt-4">
-          <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">Settings</Text>
+          <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">
+            Settings
+          </Text>
 
           <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
             Appearance
@@ -108,7 +122,13 @@ export default function SettingsScreen() {
                 <Ionicons
                   name={option.icon}
                   size={22}
-                  color={theme === option.value ? "#f97316" : (isDark ? "#9ca3af" : "#6b7280")}
+                  color={
+                    theme === option.value
+                      ? "#f97316"
+                      : isDark
+                        ? "#9ca3af"
+                        : "#6b7280"
+                  }
                 />
                 <Text
                   className={`text-xs font-medium mt-2 ${
@@ -135,7 +155,10 @@ export default function SettingsScreen() {
             style={{ backgroundColor: "#FFDD00" }}
           >
             <Ionicons name="cafe-outline" size={20} color="#0D0C22" />
-            <Text className="flex-1 ml-3 text-sm font-semibold" style={{ color: "#0D0C22" }}>
+            <Text
+              className="flex-1 ml-3 text-sm font-semibold"
+              style={{ color: "#0D0C22" }}
+            >
               Buy me a coffee
             </Text>
             <Ionicons name="open-outline" size={16} color="#0D0C22" />
